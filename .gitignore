@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Node
+node_modules/
+
+# Next.js
+.next/
+out/
+
+# Config (user-specific)
+webui_config.json
+
+# OS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+
+# Env
+.env*
+
+# Build
+*.tsbuildinfo
+next-env.d.ts
