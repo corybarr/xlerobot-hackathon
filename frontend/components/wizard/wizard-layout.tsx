@@ -9,6 +9,7 @@ import { CamerasStep } from "./steps/cameras-step";
 import { CalibrationStep } from "./steps/calibration-step";
 import { TeleoperateStep } from "./steps/teleoperate-step";
 import { RecordStep } from "./steps/record-step";
+import { InferenceStep } from "./steps/inference-step";
 
 const STEP_COMPONENTS = [
   RobotTypeStep,
@@ -17,6 +18,7 @@ const STEP_COMPONENTS = [
   CalibrationStep,
   TeleoperateStep,
   RecordStep,
+  InferenceStep,
 ];
 
 export function WizardLayout() {

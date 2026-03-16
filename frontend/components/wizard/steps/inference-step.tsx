@@ -1,0 +1,420 @@
+"use client";
+
+import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  AlertTriangle,
+  Bot,
+  ChevronDown,
+  ChevronRight,
+  FolderOpen,
+  Loader2,
+  Play,
+  Square,
+  XCircle,
+} from "lucide-react";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Separator } from "@/components/ui/separator";
+import { Switch } from "@/components/ui/switch";
+import { LogViewer } from "@/components/common/log-viewer";
+import {
+  useMotorState,
+  MotorPanel,
+  CameraFeedPanel,
+} from "@/components/common/robot-display";
+import { useWebSocket } from "@/hooks/use-websocket";
+import { services } from "@/lib/services";
+import { INFERENCE_MODELS } from "@/lib/wizard-types";
+import { useWizard } from "../wizard-provider";
+import { StepCard } from "../step-card";
+
+export function InferenceStep() {
+  const { state, dispatch, allPriorStepsComplete } = useWizard();
+  const [starting, setStarting] = useState(false);
+  const [stopping, setStopping] = useState(false);
+  const [showLogs, setShowLogs] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const priorComplete = allPriorStepsComplete(6);
+  const isRunning = state.inferenceProcessId !== null;
+
+  const { logs, isConnected, clearLogs } = useWebSocket(
+    state.inferenceProcessId
+  );
+
+  const config = state.inferenceConfig;
+
+  // Motor + camera feeds (only when displayData is on)
+  const { motors, motorOrder, frequency } = useMotorState(
+    logs,
+    isRunning && config.displayData
+  );
+  const selectedCameraFeeds = state.cameraSelections
+    .filter((c) => c.included && c.name)
+    .map((c) => ({ opencvIndex: c.opencvIndex, name: c.name }));
+
+  // Process crash polling
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const stopPolling = useCallback(() => {
+    if (pollRef.current) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+  }, []);
+
+  const startPolling = useCallback(
+    (processId: string) => {
+      stopPolling();
+      pollRef.current = setInterval(async () => {
+        try {
+          const status = await services.getInferenceStatus(processId);
+          if (status.state === "error") {
+            setErrorMsg(
+              status.error_message || "Process exited with an error"
+            );
+            setShowLogs(true);
+            dispatch({ type: "SET_INFERENCE_PROCESS_ID", id: null });
+            stopPolling();
+          } else if (status.state === "stopped") {
+            dispatch({ type: "SET_INFERENCE_PROCESS_ID", id: null });
+            stopPolling();
+          }
+        } catch {
+          setErrorMsg("Lost connection to process");
+          setShowLogs(true);
+          dispatch({ type: "SET_INFERENCE_PROCESS_ID", id: null });
+          stopPolling();
+        }
+      }, 2000);
+    },
+    [stopPolling, dispatch]
+  );
+
+  // Resume polling if process was already running when component mounts
+  useEffect(() => {
+    if (state.inferenceProcessId) {
+      startPolling(state.inferenceProcessId);
+    }
+    return stopPolling;
+  }, [state.inferenceProcessId, startPolling, stopPolling]);
+
+  const canStart =
+    priorComplete &&
+    config.policyPath.trim() !== "" &&
+    config.repoId.trim() !== "" &&
+    config.task.trim() !== "" &&
+    config.numEpisodes > 0 &&
+    config.episodeTimeS > 0 &&
+    config.modelType === "act";
+
+  async function handleStart() {
+    setStarting(true);
+    setErrorMsg(null);
+    setShowLogs(false);
+    try {
+      await services.saveConfig(state);
+      await services.stopCameraStreams().catch(() => {});
+      const res = await services.startInference(config);
+      dispatch({ type: "SET_INFERENCE_PROCESS_ID", id: res.process_id });
+      startPolling(res.process_id);
+    } catch (err) {
+      setErrorMsg(
+        err instanceof Error ? err.message : "Failed to start inference"
+      );
+      setShowLogs(true);
+    } finally {
+      setStarting(false);
+    }
+  }
+
+  async function handleStop() {
+    if (!state.inferenceProcessId) return;
+    setStopping(true);
+    stopPolling();
+    try {
+      await services.stopInference(state.inferenceProcessId);
+    } finally {
+      dispatch({ type: "SET_INFERENCE_PROCESS_ID", id: null });
+      setStopping(false);
+    }
+  }
+
+  function updateConfig(partial: Partial<typeof config>) {
+    dispatch({ type: "SET_INFERENCE_CONFIG", config: partial });
+  }
+
+  const hasLogs = logs.length > 0;
+
+  return (
+    <StepCard
+      title="Inference"
+      description="Run a trained policy to autonomously control the robot."
+      showNext={false}
+    >
+      <div className="space-y-5">
+        {!priorComplete && (
+          <Alert>
+            <AlertTriangle className="h-4 w-4" />
+            <AlertDescription>
+              Previous steps are not all completed. Complete them before running
+              inference.
+            </AlertDescription>
+          </Alert>
+        )}
+
+        {/* Model selection */}
+        <div className="space-y-4">
+          <div className="space-y-1.5">
+            <Label htmlFor="model-type">Policy Model</Label>
+            <Select
+              value={config.modelType}
+              onValueChange={(v) => updateConfig({ modelType: v })}
+              disabled={isRunning}
+            >
+              <SelectTrigger id="model-type">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {INFERENCE_MODELS.map((model) => (
+                  <SelectItem
+                    key={model.value}
+                    value={model.value}
+                    disabled={!model.supported}
+                  >
+                    <span className="flex items-center gap-2">
+                      {model.label}
+                      {!model.supported && (
+                        <Badge
+                          variant="secondary"
+                          className="text-[10px] px-1.5 py-0"
+                        >
+                          Coming Soon
+                        </Badge>
+                      )}
+                    </span>
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          {/* Policy path */}
+          <div className="space-y-1.5">
+            <Label htmlFor="policy-path">Policy Path</Label>
+            <Input
+              id="policy-path"
+              placeholder="e.g. /path/to/outputs/train/act_policy or username/act_policy"
+              value={config.policyPath}
+              onChange={(e) => updateConfig({ policyPath: e.target.value })}
+              disabled={isRunning}
+            />
+            <p className="text-xs text-muted-foreground">
+              Local folder path or HuggingFace repo ID of the trained policy.
+            </p>
+          </div>
+
+          {/* Eval repo ID */}
+          <div className="space-y-1.5">
+            <Label htmlFor="eval-repo-id">Evaluation Repo ID</Label>
+            <Input
+              id="eval-repo-id"
+              placeholder="username/eval_dataset_name"
+              value={config.repoId}
+              onChange={(e) => updateConfig({ repoId: e.target.value })}
+              disabled={isRunning}
+            />
+            <p className="text-xs text-muted-foreground">
+              Evaluation results will be saved to this HuggingFace dataset.
+            </p>
+          </div>
+
+          {/* Task description */}
+          <div className="space-y-1.5">
+            <Label htmlFor="inference-task">Task Description</Label>
+            <Input
+              id="inference-task"
+              placeholder="Use the same task description as during training"
+              value={config.task}
+              onChange={(e) => updateConfig({ task: e.target.value })}
+              disabled={isRunning}
+            />
+          </div>
+
+          {/* Episodes and timing */}
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-1.5">
+              <Label htmlFor="inf-episodes">Episodes</Label>
+              <Input
+                id="inf-episodes"
+                type="number"
+                min={1}
+                value={config.numEpisodes}
+                onChange={(e) =>
+                  updateConfig({
+                    numEpisodes: parseInt(e.target.value) || 1,
+                  })
+                }
+                disabled={isRunning}
+              />
+            </div>
+
+            <div className="space-y-1.5">
+              <Label htmlFor="inf-episode-time">Episode Time (s)</Label>
+              <Input
+                id="inf-episode-time"
+                type="number"
+                min={1}
+                value={config.episodeTimeS}
+                onChange={(e) =>
+                  updateConfig({
+                    episodeTimeS: parseInt(e.target.value) || 1,
+                  })
+                }
+                disabled={isRunning}
+              />
+            </div>
+          </div>
+
+          <div className="flex items-center gap-3">
+            <Switch
+              id="inf-display-data"
+              checked={config.displayData}
+              onCheckedChange={(checked) =>
+                updateConfig({ displayData: checked })
+              }
+              disabled={isRunning}
+            />
+            <Label htmlFor="inf-display-data">
+              Display data during inference
+            </Label>
+          </div>
+        </div>
+
+        <Separator />
+
+        {/* Start / Stop */}
+        <div className="flex items-center gap-2">
+          {!isRunning && !errorMsg && (
+            <Button onClick={handleStart} disabled={starting || !canStart}>
+              {starting ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <Play className="mr-2 h-4 w-4" />
+              )}
+              {starting ? "Starting..." : "Run Inference"}
+            </Button>
+          )}
+          {isRunning && (
+            <Button
+              variant="outline"
+              onClick={handleStop}
+              disabled={stopping}
+            >
+              {stopping ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <Square className="mr-2 h-4 w-4" />
+              )}
+              Stop
+            </Button>
+          )}
+        </div>
+
+        {/* Running status */}
+        {isRunning && (
+          <div className="flex items-center gap-3 rounded-lg border border-blue-200 dark:border-blue-900 p-4">
+            <Bot className="h-5 w-5 text-blue-500 shrink-0 animate-pulse" />
+            <div className="flex-1">
+              <p className="text-sm font-medium">
+                Policy is controlling the robot
+              </p>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                The robot is running autonomously. Press Stop when done.
+              </p>
+            </div>
+          </div>
+        )}
+
+        {/* Error state */}
+        {errorMsg && (
+          <div className="flex items-center gap-3 rounded-lg border border-red-200 bg-red-50 p-4 dark:border-red-900 dark:bg-red-950">
+            <XCircle className="h-5 w-5 text-red-600 dark:text-red-400 shrink-0" />
+            <div className="flex-1">
+              <p className="text-sm font-medium text-red-800 dark:text-red-200">
+                Inference failed
+              </p>
+              <p className="text-xs text-red-600 dark:text-red-400 mt-0.5">
+                {errorMsg}
+              </p>
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                setErrorMsg(null);
+                setShowLogs(false);
+              }}
+            >
+              Dismiss
+            </Button>
+          </div>
+        )}
+
+        {/* Live camera + motor feeds */}
+        {isRunning && config.displayData && (
+          <div className="space-y-3">
+            {selectedCameraFeeds.length > 0 && (
+              <CameraFeedPanel cameras={selectedCameraFeeds} />
+            )}
+            <MotorPanel
+              motors={motors}
+              motorOrder={motorOrder}
+              frequency={frequency}
+            />
+          </div>
+        )}
+
+        {/* Collapsible terminal logs */}
+        {hasLogs && (
+          <div>
+            <button
+              type="button"
+              onClick={() => setShowLogs(!showLogs)}
+              className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
+            >
+              {showLogs ? (
+                <ChevronDown className="h-3.5 w-3.5" />
+              ) : (
+                <ChevronRight className="h-3.5 w-3.5" />
+              )}
+              {showLogs ? "Hide Logs" : "Show Logs"}
+              <span className="text-muted-foreground/60">
+                ({logs.length} lines)
+              </span>
+            </button>
+            {showLogs && (
+              <div className="mt-2">
+                <LogViewer
+                  logs={logs}
+                  isConnected={isConnected}
+                  onClear={clearLogs}
+                  maxHeight="300px"
+                />
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </StepCard>
+  );
+}

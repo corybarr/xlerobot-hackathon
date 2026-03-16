@@ -14,10 +14,12 @@ import type {
   CameraInfo,
   CameraSelection,
   RecordingConfig,
+  InferenceConfig,
 } from "@/lib/wizard-types";
 import {
   INITIAL_STATE,
   INITIAL_RECORDING_CONFIG,
+  INITIAL_INFERENCE_CONFIG,
   SINGLE_PORT_ROLES,
   BIMANUAL_PORT_ROLES,
   validateBimanualCalibrationNames,
@@ -39,12 +41,14 @@ type Action =
   | { type: "SET_TELE_PROCESS_ID"; id: string | null }
   | { type: "SET_RECORDING_CONFIG"; config: Partial<RecordingConfig> }
   | { type: "SET_RECORD_PROCESS_ID"; id: string | null }
+  | { type: "SET_INFERENCE_CONFIG"; config: Partial<InferenceConfig> }
+  | { type: "SET_INFERENCE_PROCESS_ID"; id: string | null }
   | { type: "CLEAR_ALL_VALUES" }
   | { type: "RESTART" };
 
 // Step completion checker
 function computeCompletedSteps(state: WizardState): boolean[] {
-  const completed = [false, false, false, false, false, false];
+  const completed = [false, false, false, false, false, false, false];
 
   // Step 0: Robot Type
   completed[0] = state.robotMode !== null;
@@ -85,9 +89,10 @@ function computeCompletedSteps(state: WizardState): boolean[] {
     }
   }
 
-  // Steps 4-5: complete once the user has visited them
+  // Steps 4-6: complete once the user has visited them
   completed[4] = state.teleStepVisited;
   completed[5] = state.recordStepVisited;
+  completed[6] = state.inferenceStepVisited;
 
   return completed;
 }
@@ -119,6 +124,11 @@ function resetStepsFrom(state: WizardState, fromStep: number): WizardState {
     s.recordingConfig = { ...INITIAL_RECORDING_CONFIG };
     s.recordProcessId = null;
   }
+  if (fromStep <= 6) {
+    s.inferenceStepVisited = false;
+    s.inferenceConfig = { ...INITIAL_INFERENCE_CONFIG };
+    s.inferenceProcessId = null;
+  }
 
   s.completedSteps = computeCompletedSteps(s);
   return s;
@@ -135,6 +145,7 @@ function reducer(state: WizardState, action: Action): WizardState {
         camerasStepVisited: state.camerasStepVisited || action.step === 2,
         teleStepVisited: state.teleStepVisited || action.step === 4,
         recordStepVisited: state.recordStepVisited || action.step === 5,
+        inferenceStepVisited: state.inferenceStepVisited || action.step === 6,
       };
       break;
 
@@ -248,6 +259,17 @@ function reducer(state: WizardState, action: Action): WizardState {
       next = { ...state, recordProcessId: action.id };
       break;
 
+    case "SET_INFERENCE_CONFIG":
+      next = {
+        ...state,
+        inferenceConfig: { ...state.inferenceConfig, ...action.config },
+      };
+      break;
+
+    case "SET_INFERENCE_PROCESS_ID":
+      next = { ...state, inferenceProcessId: action.id };
+      break;
+
     case "CLEAR_ALL_VALUES":
       next = { ...INITIAL_STATE, currentStep: state.currentStep };
       break;
@@ -289,7 +311,7 @@ export function WizardProvider({ children }: { children: ReactNode }) {
     () =>
       dispatch({
         type: "GO_TO_STEP",
-        step: Math.min(state.currentStep + 1, 5),
+        step: Math.min(state.currentStep + 1, 6),
       }),
     [state.currentStep]
   );

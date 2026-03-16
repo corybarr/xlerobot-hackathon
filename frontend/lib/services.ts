@@ -1,4 +1,4 @@
-import type { PortInfo, CameraInfo, StartResponse, RecordingConfig, WizardState } from "./wizard-types";
+import type { PortInfo, CameraInfo, StartResponse, RecordingConfig, InferenceConfig, WizardState } from "./wizard-types";
 import { validateBimanualCalibrationNames } from "./wizard-types";
 
 const USE_MOCK = false;
@@ -248,5 +248,41 @@ export const services = {
   openDataFolder: async (): Promise<void> => {
     if (USE_MOCK) return;
     await fetchAPI("/api/recording/open-folder", { method: "POST" });
+  },
+
+  startInference: async (config: InferenceConfig): Promise<StartResponse> => {
+    if (USE_MOCK) {
+      const mock = await import("./mock-data");
+      return mock.startResponse("inference");
+    }
+    return fetchAPI<StartResponse>("/api/inference/start", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        policy_path: config.policyPath,
+        repo_id: config.repoId,
+        single_task: config.task,
+        num_episodes: config.numEpisodes,
+        episode_time_s: config.episodeTimeS,
+        display_data: config.displayData,
+      }),
+    });
+  },
+
+  stopInference: async (processId: string): Promise<void> => {
+    if (USE_MOCK) return;
+    await fetchAPI(`/api/inference/stop/${processId}`, { method: "POST" });
+  },
+
+  getInferenceStatus: async (
+    processId: string
+  ): Promise<{
+    process_id: string;
+    process_type: string;
+    state: "running" | "stopped" | "error";
+    uptime_seconds: number | null;
+    error_message: string | null;
+  }> => {
+    return fetchAPI(`/api/inference/status/${processId}`);
   },
 };

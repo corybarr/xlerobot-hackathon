@@ -23,6 +23,7 @@
 - [x] `models/setup.py` - PortInfo, CameraInfo, CameraPreview
 - [x] `models/recording.py` - RecordingRequest, HFRepoInfo, CreateRepoRequest
 - [x] `models/teleoperation.py` - TeleoperationRequest/Response
+- [x] `models/inference.py` - InferenceRequest/Response
 
 ### API Routes
 - [x] `api/config.py` - GET/POST/DELETE /api/config
@@ -30,6 +31,7 @@
 - [x] `api/calibration.py` - GET status, GET missing, GET files, POST start/stop
 - [x] `api/teleoperation.py` - POST start/stop, GET status
 - [x] `api/recording.py` - POST start/stop, GET status, DELETE cache
+- [x] `api/inference.py` - POST start/stop, GET status
 - [x] `api/huggingface.py` - GET whoami, GET/POST repos
 - [x] `api/system.py` - GET system status
 
@@ -44,7 +46,7 @@
 ## Frontend - Wizard Setup UI (Complete)
 
 ### Architecture
-The frontend is a single-page wizard with 6 sequential steps. One centered card per step with a sidebar for navigation. Mock data layer with easy swap to real API.
+The frontend is a single-page wizard with 7 sequential steps. One centered card per step with a sidebar for navigation. Mock data layer with easy swap to real API.
 
 ### Core Infrastructure
 - [x] `lib/wizard-types.ts` - All TypeScript interfaces, constants, initial state
@@ -68,6 +70,7 @@ The frontend is a single-page wizard with 6 sequential steps. One centered card 
 - [x] `components/wizard/steps/calibration-step.tsx` - Step 4: Calibration file selection per arm
 - [x] `components/wizard/steps/teleoperate-step.tsx` - Step 5: Config summary + start/stop + logs
 - [x] `components/wizard/steps/record-step.tsx` - Step 6: Recording form + start/stop + logs
+- [x] `components/wizard/steps/inference-step.tsx` - Step 7: Inference with trained policy + start/stop + logs
 
 ### Shared Components (Reused)
 - [x] `components/common/log-viewer.tsx` - Real-time log display with auto-scroll
@@ -81,6 +84,15 @@ The frontend is a single-page wizard with 6 sequential steps. One centered card 
 ---
 
 ## Changelog
+
+### 2026-03-16
+- **Feature: Inference step (Step 7) — Run trained policies on the robot** — Added a new wizard step for running inference with trained policies. The robot is controlled autonomously by a policy (no teleoperator needed). Uses `lerobot-record` with `--policy.path` and without `--teleop.*` flags.
+  - **Model selector dropdown** — Dropdown with ACT (active), SmolVLA, Diffusion Policy, TD-MPC, and VQ-BeT (greyed out with "Coming Soon" badges). Only ACT is currently supported.
+  - **Policy path input** — Accepts local folder path or HuggingFace repo ID of the trained policy.
+  - **Evaluation config** — Repo ID for eval results, task description (should match training), episode count, episode duration, display data toggle.
+  - **Real-time monitoring** — Live camera feeds, motor position sliders, WebSocket log streaming, and process crash detection (same patterns as Record step).
+  - Created: `backend/models/inference.py` (InferenceRequest/InferenceResponse), `backend/api/inference.py` (start/stop/status endpoints + command builder), `frontend/components/wizard/steps/inference-step.tsx`
+  - Modified: `backend/main.py` (registered inference router), `frontend/lib/wizard-types.ts` (InferenceConfig, INFERENCE_MODELS, step 7 definition, state fields), `frontend/components/wizard/wizard-provider.tsx` (inference actions/reducer/reset/completion), `frontend/lib/services.ts` (startInference/stopInference/getInferenceStatus), `frontend/components/wizard/wizard-layout.tsx` (registered InferenceStep)
 
 ### 2026-03-15
 - **Fix: Bimanual teleoperation — calibration ID and path mismatch** — Bimanual teleoperation was crashing because (1) commands passed per-arm IDs instead of lerobot's expected base IDs, and (2) calibration files were stored under `bi_so101_*` directories instead of the `so101_*` directories that sub-arms actually look in. Root cause: lerobot's bimanual wrappers create `SO101Follower`/`SO101Leader` sub-arm instances that derive IDs as `{base}_left`/`{base}_right` and look for calibration files in `so101_follower/`/`so101_leader/`.
@@ -226,14 +238,16 @@ src/lerobot/webui/
 │   │   ├── recording.py
 │   │   ├── setup.py
 │   │   ├── system.py
-│   │   └── teleoperation.py
+│   │   ├── teleoperation.py
+│   │   └── inference.py
 │   ├── models/
 │   │   ├── __init__.py
 │   │   ├── config.py
 │   │   ├── recording.py
 │   │   ├── setup.py
 │   │   ├── system.py
-│   │   └── teleoperation.py
+│   │   ├── teleoperation.py
+│   │   └── inference.py
 │   ├── services/
 │   │   ├── __init__.py
 │   │   ├── auto_calibration.py
@@ -270,7 +284,8 @@ src/lerobot/webui/
     │           ├── cameras-step.tsx
     │           ├── calibration-step.tsx
     │           ├── teleoperate-step.tsx
-    │           └── record-step.tsx
+    │           ├── record-step.tsx
+    │           └── inference-step.tsx
     ├── hooks/
     │   └── use-websocket.ts
     └── lib/

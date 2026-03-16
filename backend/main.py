@@ -64,6 +64,7 @@ from backend.api import (
     calibration,
     config,
     huggingface,
+    inference,
     recording,
     setup,
     system,
@@ -74,6 +75,7 @@ app.include_router(setup.router, prefix="/api/setup", tags=["setup"])
 app.include_router(calibration.router, prefix="/api/calibration", tags=["calibration"])
 app.include_router(teleoperation.router, prefix="/api/teleoperation", tags=["teleoperation"])
 app.include_router(recording.router, prefix="/api/recording", tags=["recording"])
+app.include_router(inference.router, prefix="/api/inference", tags=["inference"])
 app.include_router(config.router, prefix="/api/config", tags=["config"])
 app.include_router(huggingface.router, prefix="/api/huggingface", tags=["huggingface"])
 app.include_router(system.router, prefix="/api/system", tags=["system"])

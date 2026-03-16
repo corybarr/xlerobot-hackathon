@@ -35,6 +35,26 @@ export interface RecordingConfig {
   cameraHeight: number;
 }
 
+// Inference configuration
+export interface InferenceConfig {
+  policyPath: string;
+  repoId: string;
+  task: string;
+  numEpisodes: number;
+  episodeTimeS: number;
+  displayData: boolean;
+  modelType: string; // "act" | "smolvla" | "diffusion" etc.
+}
+
+// Supported inference model types
+export const INFERENCE_MODELS = [
+  { value: "act", label: "ACT", supported: true },
+  { value: "smolvla", label: "SmolVLA", supported: false },
+  { value: "diffusion", label: "Diffusion Policy", supported: false },
+  { value: "tdmpc", label: "TD-MPC", supported: false },
+  { value: "vqbet", label: "VQ-BeT", supported: false },
+] as const;
+
 // API start response
 export interface StartResponse {
   process_id: string;
@@ -43,7 +63,7 @@ export interface StartResponse {
 
 // Wizard state
 export interface WizardState {
-  currentStep: number; // 0-5
+  currentStep: number; // 0-6
   completedSteps: boolean[];
 
   // Step 0: Robot Type
@@ -71,6 +91,11 @@ export interface WizardState {
   recordStepVisited: boolean;
   recordingConfig: RecordingConfig;
   recordProcessId: string | null;
+
+  // Step 6: Inference
+  inferenceStepVisited: boolean;
+  inferenceConfig: InferenceConfig;
+  inferenceProcessId: string | null;
 }
 
 // Port roles by mode
@@ -116,9 +141,20 @@ export const STEPS = [
   { label: "Calibration", description: "Choose calibration for each arm" },
   { label: "Teleoperate", description: "Test robot teleoperation" },
   { label: "Record", description: "Record training data" },
+  { label: "Inference", description: "Run trained policy on robot" },
 ] as const;
 
 // Initial state
+export const INITIAL_INFERENCE_CONFIG: InferenceConfig = {
+  policyPath: "",
+  repoId: "",
+  task: "",
+  numEpisodes: 10,
+  episodeTimeS: 50,
+  displayData: true,
+  modelType: "act",
+};
+
 export const INITIAL_RECORDING_CONFIG: RecordingConfig = {
   repoId: "",
   task: "",
@@ -133,7 +169,7 @@ export const INITIAL_RECORDING_CONFIG: RecordingConfig = {
 
 export const INITIAL_STATE: WizardState = {
   currentStep: 0,
-  completedSteps: [false, false, false, false, false, false],
+  completedSteps: [false, false, false, false, false, false, false],
   robotMode: null,
   detectedPorts: [],
   portAssignments: {},
@@ -148,6 +184,9 @@ export const INITIAL_STATE: WizardState = {
   recordStepVisited: false,
   recordingConfig: { ...INITIAL_RECORDING_CONFIG },
   recordProcessId: null,
+  inferenceStepVisited: false,
+  inferenceConfig: { ...INITIAL_INFERENCE_CONFIG },
+  inferenceProcessId: null,
 };
 
 // ─── Bimanual calibration naming validation ─────────────────────────────────
