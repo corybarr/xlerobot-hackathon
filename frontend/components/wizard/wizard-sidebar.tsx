@@ -24,7 +24,13 @@ export function WizardSidebar() {
       <nav className="flex-1 space-y-1 px-3 py-4">
         {STEPS.map((step, i) => {
           const isCurrent = i === state.currentStep;
-          const isComplete = state.completedSteps[i];
+          // A step only shows as complete if all its prerequisites are also complete
+          // Steps 0-3 are sequential; steps 4-6 only require 0-3 (hardware setup)
+          const prereqsMet =
+            i <= 3
+              ? state.completedSteps.slice(0, i).every(Boolean)
+              : state.completedSteps.slice(0, 4).every(Boolean);
+          const isComplete = state.completedSteps[i] && prereqsMet;
 
           return (
             <button
