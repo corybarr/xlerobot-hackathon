@@ -43,6 +43,7 @@ type Action =
   | { type: "SET_RECORD_PROCESS_ID"; id: string | null }
   | { type: "SET_INFERENCE_CONFIG"; config: Partial<InferenceConfig> }
   | { type: "SET_INFERENCE_PROCESS_ID"; id: string | null }
+  | { type: "TOGGLE_DEBUG_MODE" }
   | { type: "CLEAR_ALL_VALUES" }
   | { type: "RESTART" };
 
@@ -268,6 +269,10 @@ function reducer(state: WizardState, action: Action): WizardState {
 
     case "SET_INFERENCE_PROCESS_ID":
       next = { ...state, inferenceProcessId: action.id };
+      break;
+
+    case "TOGGLE_DEBUG_MODE":
+      next = { ...state, debugMode: !state.debugMode };
       break;
 
     case "CLEAR_ALL_VALUES":

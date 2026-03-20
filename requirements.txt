@@ -12,3 +12,6 @@ opencv-python-headless>=4.5.0
 
 # Hugging Face Hub (datasets, repo creation)
 huggingface_hub>=0.20.0
+
+# Direct servo motor diagnostics (debug page)
+feetech-servo-sdk>=1.0.0

@@ -113,6 +113,12 @@ def _wiggle_gripper_sync(port: str) -> None:
         current = positions["gripper"]
         offset = 200  # ~200 encoder steps is a small but visible movement
 
+        if current - offset < 0 or current + offset > 4095:
+            raise ValueError(
+                f"Gripper position ({current}) is too close to the edge of its range. "
+                "Please unplug and replug the power to the arm, then try again."
+            )
+
         for _ in range(3):
             bus.write("Goal_Position", "gripper", current + offset, normalize=False)
             time.sleep(0.3)

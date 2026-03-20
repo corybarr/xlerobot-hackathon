@@ -1,13 +1,14 @@
 "use client";
 
 import Image from "next/image";
-import { Check } from "lucide-react";
+import { Check, Bug } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { STEPS } from "@/lib/wizard-types";
 import { useWizard } from "./wizard-provider";
+import { Button } from "@/components/ui/button";
 
 export function WizardSidebar() {
-  const { state, goToStep } = useWizard();
+  const { state, goToStep, dispatch } = useWizard();
 
   return (
     <aside className="fixed left-0 top-0 z-20 flex h-screen w-60 flex-col border-r bg-white">
@@ -35,7 +36,10 @@ export function WizardSidebar() {
           return (
             <button
               key={i}
-              onClick={() => goToStep(i)}
+              onClick={() => {
+                if (state.debugMode) dispatch({ type: "TOGGLE_DEBUG_MODE" });
+                goToStep(i);
+              }}
               className={cn(
                 "flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm transition-colors",
                 isCurrent && "bg-primary/5 font-medium text-foreground",
@@ -53,8 +57,17 @@ export function WizardSidebar() {
           );
         })}
       </nav>
-      <div className="border-t px-6 py-4">
+      <div className="border-t px-4 py-3 flex items-center justify-between">
         <p className="text-xs text-muted-foreground">LeRobot Setup Wizard</p>
+        <Button
+          variant={state.debugMode ? "default" : "ghost"}
+          size="icon"
+          className="h-7 w-7"
+          onClick={() => dispatch({ type: "TOGGLE_DEBUG_MODE" })}
+          title="Hardware Diagnostics"
+        >
+          <Bug className="h-3.5 w-3.5" />
+        </Button>
       </div>
     </aside>
   );

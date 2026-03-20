@@ -22,7 +22,8 @@ class CameraScannerService:
             output_dir: Directory for storing preview images. Defaults to outputs/camera_previews.
         """
         if output_dir is None:
-            repo_root = Path(__file__).parent.parent.parent.parent.parent.parent
+            # backend/services/camera_scanner.py -> services/ -> backend/ -> repo root
+            repo_root = Path(__file__).parent.parent.parent
             output_dir = repo_root / "outputs" / "camera_previews"
 
         self.output_dir = output_dir

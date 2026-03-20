@@ -1,26 +1,42 @@
 """Port scanning service wrapping lerobot_find_port logic."""
 
+import platform
 from pathlib import Path
 from typing import List
 
 from backend.models.setup import PortInfo
 
-# Feetech motor controllers on macOS show up as /dev/cu.usbmodem*
-FEETECH_PORT_PREFIX = "/dev/cu.usbmodem"
+
+def _get_serial_port_globs() -> List[str]:
+    """Return glob patterns for serial ports under /dev, per platform.
+
+    - macOS: Feetech/USB serial show up as /dev/cu.usbmodem*
+    - Linux: USB serial adapters as /dev/ttyUSB*, USB CDC ACM as /dev/ttyACM*
+    """
+    system = platform.system()
+    if system == "Darwin":
+        return ["cu.usbmodem*"]
+    if system == "Linux":
+        return ["ttyUSB*", "ttyACM*"]
+    return []
 
 
 class PortScannerService:
     """Service for scanning and detecting serial ports."""
 
     def list_ports(self) -> List[PortInfo]:
-        """List available Feetech motor controller ports.
+        """List available serial ports (Feetech motor controllers / SO101 leader/follower).
 
-        Only returns ports matching /dev/cu.usbmodem* which are Feetech motor controllers.
+        On macOS returns /dev/cu.usbmodem*; on Linux returns /dev/ttyUSB* and /dev/ttyACM*.
 
         Returns:
             List of PortInfo objects.
         """
-        ports = [str(p) for p in Path("/dev").glob("cu.usbmodem*")]
+        dev = Path("/dev")
+        ports: List[str] = []
+        for pattern in _get_serial_port_globs():
+            ports.extend(str(p) for p in dev.glob(pattern) if p.exists())
+        ports = sorted(set(ports))
 
         return [
             PortInfo(
@@ -28,7 +44,7 @@ class PortScannerService:
                 description="Feetech Motor Controller",
                 hwid=None,
             )
-            for port in sorted(ports)
+            for port in ports
         ]
 
     def detect_port_change(self, ports_before: List[str], ports_after: List[str]) -> tuple[List[str], List[str]]:

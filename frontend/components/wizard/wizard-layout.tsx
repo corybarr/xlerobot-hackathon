@@ -10,6 +10,7 @@ import { CalibrationStep } from "./steps/calibration-step";
 import { TeleoperateStep } from "./steps/teleoperate-step";
 import { RecordStep } from "./steps/record-step";
 import { InferenceStep } from "./steps/inference-step";
+import { DebugPanel } from "./steps/debug-panel";
 
 const STEP_COMPONENTS = [
   RobotTypeStep,
@@ -32,7 +33,7 @@ export function WizardLayout() {
         <WizardTopbar />
         <main className="flex justify-center px-8 py-12">
           <div className="w-full max-w-2xl">
-            <StepComponent />
+            {state.debugMode ? <DebugPanel /> : <StepComponent />}
           </div>
         </main>
       </div>

@@ -63,6 +63,7 @@ async def shutdown_event():
 from backend.api import (
     calibration,
     config,
+    debug,
     huggingface,
     inference,
     recording,
@@ -79,6 +80,7 @@ app.include_router(inference.router, prefix="/api/inference", tags=["inference"]
 app.include_router(config.router, prefix="/api/config", tags=["config"])
 app.include_router(huggingface.router, prefix="/api/huggingface", tags=["huggingface"])
 app.include_router(system.router, prefix="/api/system", tags=["system"])
+app.include_router(debug.router, prefix="/api/debug", tags=["debug"])
 
 # WebSocket endpoint
 from backend.websockets.logs import router as websocket_router
