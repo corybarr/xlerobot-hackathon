@@ -322,6 +322,30 @@ export const services = {
     await fetchAPI(`/api/inference/stop/${processId}`, { method: "POST" });
   },
 
+  detectBasePort: async (ports: string[]): Promise<{ detected_port: string | null; message: string }> => {
+    return fetchAPI("/api/base-control/detect", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ports }),
+    });
+  },
+
+  connectBase: async (port: string): Promise<{ connected: boolean; port: string | null; speed_index: number }> => {
+    return fetchAPI("/api/base-control/connect", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ port }),
+    });
+  },
+
+  disconnectBase: async (): Promise<void> => {
+    await fetchAPI("/api/base-control/disconnect", { method: "POST" });
+  },
+
+  getBaseStatus: async (): Promise<{ connected: boolean; port: string | null; speed_index: number }> => {
+    return fetchAPI("/api/base-control/status");
+  },
+
   getInferenceStatus: async (
     processId: string
   ): Promise<{

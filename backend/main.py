@@ -56,11 +56,14 @@ async def startup_event():
 async def shutdown_event():
     """Cleanup on shutdown."""
     print("LeRobot Web UI shutting down...")
+    from backend.services.base_control import base_control_service
+    base_control_service.disconnect()
     await process_manager.cleanup()
 
 
 # Import and include routers
 from backend.api import (
+    base_control,
     calibration,
     config,
     debug,
@@ -72,6 +75,7 @@ from backend.api import (
     teleoperation,
 )
 
+app.include_router(base_control.router, prefix="/api/base-control", tags=["base-control"])
 app.include_router(setup.router, prefix="/api/setup", tags=["setup"])
 app.include_router(calibration.router, prefix="/api/calibration", tags=["calibration"])
 app.include_router(teleoperation.router, prefix="/api/teleoperation", tags=["teleoperation"])
@@ -82,10 +86,12 @@ app.include_router(huggingface.router, prefix="/api/huggingface", tags=["hugging
 app.include_router(system.router, prefix="/api/system", tags=["system"])
 app.include_router(debug.router, prefix="/api/debug", tags=["debug"])
 
-# WebSocket endpoint
+# WebSocket endpoints
 from backend.websockets.logs import router as websocket_router
+from backend.websockets.base_control import router as base_control_ws_router
 
 app.include_router(websocket_router)
+app.include_router(base_control_ws_router)
 
 
 def run_server(host: str = "0.0.0.0", port: int = 8000):

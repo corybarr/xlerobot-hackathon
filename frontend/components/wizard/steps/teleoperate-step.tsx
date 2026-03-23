@@ -23,6 +23,7 @@ import { services } from "@/lib/services";
 import { validateBimanualCalibrationNames } from "@/lib/wizard-types";
 import { useWizard } from "../wizard-provider";
 import { StepCard } from "../step-card";
+import { BaseControlPanel } from "./base-control-panel";
 
 type TeleState = "idle" | "starting" | "running" | "error" | "stopped";
 
@@ -34,6 +35,7 @@ export function TeleoperateStep() {
   const [showLogs, setShowLogs] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [showCameras, setShowCameras] = useState(false);
+  const [baseConnected, setBaseConnected] = useState(false);
   const priorComplete = allPriorStepsComplete(4);
 
   const selectedCameraFeeds = state.cameraSelections
@@ -127,6 +129,7 @@ export function TeleoperateStep() {
   const isRunning = teleState === "running";
   const isError = teleState === "error";
   const isStarting = teleState === "starting";
+  const armTeleopActive = isRunning || isStarting;
   const { motors, motorOrder, frequency } = useMotorState(logs, isRunning);
   const summaryItems = buildSummary(state);
 
@@ -191,99 +194,127 @@ export function TeleoperateStep() {
 
         {showCameras && <CameraFeedPanel cameras={selectedCameraFeeds} />}
 
-        {/* Running state */}
-        {isRunning && (
-          <div className="space-y-3">
-            <div className="flex items-center gap-3 rounded-lg border p-4">
-              <CircleCheck className="h-5 w-5 text-muted-foreground shrink-0" />
-              <div className="flex-1">
-                <p className="text-sm font-medium">
-                  Teleoperation is running
-                </p>
-                <p className="text-xs text-muted-foreground">
-                  Move the leader arm to control the follower.
-                </p>
-              </div>
-              <Button variant="outline" size="sm" onClick={handleStop}>
-                <Square className="mr-2 h-3.5 w-3.5" />
-                Stop
-              </Button>
-            </div>
+        <Separator />
 
-            <MotorPanel motors={motors} motorOrder={motorOrder} frequency={frequency} />
-          </div>
-        )}
+        {/* ──── Section 1: Arm Teleoperation ──── */}
+        <div className="space-y-3">
+          <p className="text-sm font-medium">Arm Teleoperation</p>
+          <p className="text-xs text-muted-foreground">
+            Run lerobot-teleoperate to control the follower arm(s) with the
+            leader arm(s).
+          </p>
 
-        {/* Error state */}
-        {isError && (
-          <div className="space-y-3">
-            <div className="flex items-center gap-3 rounded-lg border border-red-200 bg-red-50 p-4 dark:border-red-900 dark:bg-red-950">
-              <XCircle className="h-5 w-5 text-red-600 dark:text-red-400 shrink-0" />
-              <div className="flex-1">
-                <p className="text-sm font-medium text-red-800 dark:text-red-200">
-                  Teleoperation failed
-                </p>
-                {errorMsg && (
-                  <p className="text-xs text-red-600 dark:text-red-400 mt-0.5">
-                    {errorMsg}
+          {/* Running state */}
+          {isRunning && (
+            <div className="space-y-3">
+              <div className="flex items-center gap-3 rounded-lg border p-4">
+                <CircleCheck className="h-5 w-5 text-muted-foreground shrink-0" />
+                <div className="flex-1">
+                  <p className="text-sm font-medium">
+                    Teleoperation is running
                   </p>
-                )}
+                  <p className="text-xs text-muted-foreground">
+                    Move the leader arm to control the follower.
+                  </p>
+                </div>
+                <Button variant="outline" size="sm" onClick={handleStop}>
+                  <Square className="mr-2 h-3.5 w-3.5" />
+                  Stop
+                </Button>
               </div>
-              <Button variant="outline" size="sm" onClick={handleDismiss}>
-                Dismiss
-              </Button>
+
+              <MotorPanel motors={motors} motorOrder={motorOrder} frequency={frequency} />
             </div>
-            <ErrorDiagnostics logs={logs} />
-          </div>
-        )}
+          )}
 
-        {/* Idle / Start button */}
-        {!isRunning && !isError && (
-          <Button
-            onClick={handleStart}
-            disabled={isStarting || !priorComplete}
-          >
-            {isStarting ? (
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-            ) : (
-              <Play className="mr-2 h-4 w-4" />
-            )}
-            {isStarting ? "Starting..." : "Start Teleoperation"}
-          </Button>
-        )}
-
-        {/* Collapsible Logs — always available when process exists */}
-        {state.teleProcessId && (
-          <div>
-            <button
-              type="button"
-              onClick={() => setShowLogs(!showLogs)}
-              className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
-            >
-              {showLogs ? (
-                <ChevronDown className="h-3.5 w-3.5" />
-              ) : (
-                <ChevronRight className="h-3.5 w-3.5" />
-              )}
-              {showLogs ? "Hide Logs" : "Show Logs"}
-              {logs.length > 0 && (
-                <span className="text-muted-foreground/60">
-                  ({logs.length} lines)
-                </span>
-              )}
-            </button>
-            {showLogs && (
-              <div className="mt-2">
-                <LogViewer
-                  logs={logs}
-                  isConnected={isConnected}
-                  onClear={clearLogs}
-                  maxHeight="300px"
-                />
+          {/* Error state */}
+          {isError && (
+            <div className="space-y-3">
+              <div className="flex items-center gap-3 rounded-lg border border-red-200 bg-red-50 p-4 dark:border-red-900 dark:bg-red-950">
+                <XCircle className="h-5 w-5 text-red-600 dark:text-red-400 shrink-0" />
+                <div className="flex-1">
+                  <p className="text-sm font-medium text-red-800 dark:text-red-200">
+                    Teleoperation failed
+                  </p>
+                  {errorMsg && (
+                    <p className="text-xs text-red-600 dark:text-red-400 mt-0.5">
+                      {errorMsg}
+                    </p>
+                  )}
+                </div>
+                <Button variant="outline" size="sm" onClick={handleDismiss}>
+                  Dismiss
+                </Button>
               </div>
-            )}
-          </div>
-        )}
+              <ErrorDiagnostics logs={logs} />
+            </div>
+          )}
+
+          {/* Idle / Start button */}
+          {!isRunning && !isError && (
+            <>
+              {baseConnected && (
+                <p className="text-xs text-amber-600 dark:text-amber-400">
+                  Disconnect the base first — both cannot use the serial port at
+                  the same time.
+                </p>
+              )}
+              <Button
+                onClick={handleStart}
+                disabled={isStarting || !priorComplete || baseConnected}
+              >
+                {isStarting ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  <Play className="mr-2 h-4 w-4" />
+                )}
+                {isStarting ? "Starting..." : "Start Teleoperation"}
+              </Button>
+            </>
+          )}
+
+          {/* Collapsible Logs — always available when process exists */}
+          {state.teleProcessId && (
+            <div>
+              <button
+                type="button"
+                onClick={() => setShowLogs(!showLogs)}
+                className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
+              >
+                {showLogs ? (
+                  <ChevronDown className="h-3.5 w-3.5" />
+                ) : (
+                  <ChevronRight className="h-3.5 w-3.5" />
+                )}
+                {showLogs ? "Hide Logs" : "Show Logs"}
+                {logs.length > 0 && (
+                  <span className="text-muted-foreground/60">
+                    ({logs.length} lines)
+                  </span>
+                )}
+              </button>
+              {showLogs && (
+                <div className="mt-2">
+                  <LogViewer
+                    logs={logs}
+                    isConnected={isConnected}
+                    onClear={clearLogs}
+                    maxHeight="300px"
+                  />
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        <Separator />
+
+        {/* ──── Section 2: Base Keyboard Control ──── */}
+        <BaseControlPanel
+          disabled={armTeleopActive}
+          disabledReason="Stop arm teleoperation first — both cannot use the serial port at the same time."
+          onConnectionChange={setBaseConnected}
+        />
       </div>
     </StepCard>
   );
