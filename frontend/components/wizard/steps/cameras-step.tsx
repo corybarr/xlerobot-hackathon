@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { Loader2, Camera } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
@@ -20,6 +20,18 @@ import { StepCard } from "../step-card";
 function CameraFeed({ opencvIndex }: { opencvIndex: number }) {
   // Unique timestamp per mount forces a fresh MJPEG connection
   const [ts] = useState(() => Date.now());
+
+  // Explicitly stop this camera's stream on unmount — the Next.js rewrite proxy
+  // doesn't reliably propagate MJPEG disconnects, so without this the backend
+  // generator and capture subprocess would keep running after tab switch.
+  useEffect(() => {
+    return () => {
+      fetch(`/api/setup/cameras/stream/${opencvIndex}/stop`, {
+        method: "POST",
+      }).catch(() => {});
+    };
+  }, [opencvIndex]);
+
   return (
     <div className="border-t bg-muted/30 p-2">
       {/* eslint-disable-next-line @next/next/no-img-element */}

@@ -293,6 +293,15 @@ export function TrainingStep() {
             type: "SET_TRAINING_OUTPUT_MODEL",
             modelId: status.output_model_id,
           });
+          // Persist to localStorage so the inference page can offer it as a dropdown option
+          try {
+            const key = "lerobot_trained_policy_paths";
+            const existing = JSON.parse(localStorage.getItem(key) || "[]");
+            if (!existing.some((p: { path: string }) => p.path === status.output_model_id)) {
+              existing.unshift({ path: status.output_model_id, savedAt: new Date().toISOString() });
+              localStorage.setItem(key, JSON.stringify(existing));
+            }
+          } catch { /* ignore */ }
         }
         if (
           status.status === "completed" ||

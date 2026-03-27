@@ -133,6 +133,17 @@ export function CameraFeed({ opencvIndex }: { opencvIndex: number }) {
   // Unique timestamp per mount forces the browser to open a fresh MJPEG connection
   // (prevents showing a frozen last-frame from a previous stream).
   const [ts] = useState(() => Date.now());
+
+  // Explicitly stop this camera's stream on unmount — the Next.js rewrite proxy
+  // doesn't reliably propagate MJPEG disconnects.
+  useEffect(() => {
+    return () => {
+      fetch(`/api/setup/cameras/stream/${opencvIndex}/stop`, {
+        method: "POST",
+      }).catch(() => {});
+    };
+  }, [opencvIndex]);
+
   return (
     // eslint-disable-next-line @next/next/no-img-element
     <img

@@ -10,6 +10,7 @@ import {
   Loader2,
   Play,
   Square,
+  Trash2,
   XCircle,
 } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -38,12 +39,52 @@ import { INFERENCE_MODELS } from "@/lib/wizard-types";
 import { useWizard } from "../wizard-provider";
 import { StepCard } from "../step-card";
 
+// ---------------------------------------------------------------------------
+// Persistent policy path storage (localStorage)
+// ---------------------------------------------------------------------------
+
+const POLICY_PATHS_KEY = "lerobot_trained_policy_paths";
+
+interface SavedPolicy {
+  path: string;
+  savedAt: string; // ISO date
+}
+
+function getSavedPolicies(): SavedPolicy[] {
+  try {
+    const raw = localStorage.getItem(POLICY_PATHS_KEY);
+    return raw ? (JSON.parse(raw) as SavedPolicy[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+function savePolicyPath(path: string) {
+  const trimmed = path.trim();
+  if (!trimmed) return;
+  const existing = getSavedPolicies();
+  if (existing.some((p) => p.path === trimmed)) return;
+  const updated = [{ path: trimmed, savedAt: new Date().toISOString() }, ...existing];
+  localStorage.setItem(POLICY_PATHS_KEY, JSON.stringify(updated));
+}
+
+function removePolicyPath(path: string) {
+  const existing = getSavedPolicies();
+  localStorage.setItem(
+    POLICY_PATHS_KEY,
+    JSON.stringify(existing.filter((p) => p.path !== path))
+  );
+}
+
 export function InferenceStep() {
   const { state, dispatch } = useWizard();
   const [starting, setStarting] = useState(false);
   const [stopping, setStopping] = useState(false);
   const [showLogs, setShowLogs] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [savedPolicies, setSavedPolicies] = useState<SavedPolicy[]>([]);
+  const [showPolicyDropdown, setShowPolicyDropdown] = useState(false);
+  const dropdownRef = useRef<HTMLDivElement>(null);
   // Inference only requires hardware setup (steps 0-3: robot type, ports, cameras, calibration)
   // It does NOT require teleoperate (step 4) or record (step 5) to have been visited
   const hardwareReady =
@@ -59,18 +100,35 @@ export function InferenceStep() {
 
   const config = state.inferenceConfig;
 
-  // Pre-fill policy path from training step's output model
+  // Load saved policies on mount
   useEffect(() => {
-    if (
-      state.trainingOutputModelId &&
-      !config.policyPath
-    ) {
-      dispatch({
-        type: "SET_INFERENCE_CONFIG",
-        config: { policyPath: state.trainingOutputModelId },
-      });
+    setSavedPolicies(getSavedPolicies());
+  }, []);
+
+  // Pre-fill policy path from training step's output model and save it
+  useEffect(() => {
+    if (state.trainingOutputModelId) {
+      savePolicyPath(state.trainingOutputModelId);
+      setSavedPolicies(getSavedPolicies());
+      if (!config.policyPath) {
+        dispatch({
+          type: "SET_INFERENCE_CONFIG",
+          config: { policyPath: state.trainingOutputModelId },
+        });
+      }
     }
   }, [state.trainingOutputModelId, config.policyPath, dispatch]);
+
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
+        setShowPolicyDropdown(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
 
   // Motor + camera feeds (only when displayData is on)
   const { motors, motorOrder, frequency } = useMotorState(
@@ -234,13 +292,69 @@ export function InferenceStep() {
           {/* Policy path */}
           <div className="space-y-1.5">
             <Label htmlFor="policy-path">Policy Path</Label>
-            <Input
-              id="policy-path"
-              placeholder="e.g. /path/to/outputs/train/act_policy or username/act_policy"
-              value={config.policyPath}
-              onChange={(e) => updateConfig({ policyPath: e.target.value })}
-              disabled={isRunning}
-            />
+            <div className="relative" ref={dropdownRef}>
+              <div className="flex gap-1.5">
+                <Input
+                  id="policy-path"
+                  placeholder="e.g. /path/to/outputs/train/act_policy or username/act_policy"
+                  value={config.policyPath}
+                  onChange={(e) => updateConfig({ policyPath: e.target.value })}
+                  onFocus={() => savedPolicies.length > 0 && setShowPolicyDropdown(true)}
+                  disabled={isRunning}
+                  className="flex-1"
+                />
+                {savedPolicies.length > 0 && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="icon"
+                    className="shrink-0"
+                    disabled={isRunning}
+                    onClick={() => setShowPolicyDropdown(!showPolicyDropdown)}
+                  >
+                    <ChevronDown className="h-4 w-4" />
+                  </Button>
+                )}
+              </div>
+              {showPolicyDropdown && savedPolicies.length > 0 && (
+                <div className="absolute z-50 mt-1 w-full rounded-md border bg-popover shadow-lg">
+                  <div className="p-1">
+                    <p className="px-2 py-1 text-[10px] font-medium text-muted-foreground uppercase tracking-wider">
+                      Trained Policies
+                    </p>
+                    {savedPolicies.map((p) => (
+                      <div
+                        key={p.path}
+                        className="flex items-center gap-1 rounded-sm hover:bg-accent group"
+                      >
+                        <button
+                          type="button"
+                          className="flex-1 text-left px-2 py-1.5 text-sm font-mono truncate"
+                          onClick={() => {
+                            updateConfig({ policyPath: p.path });
+                            setShowPolicyDropdown(false);
+                          }}
+                        >
+                          {p.path}
+                        </button>
+                        <button
+                          type="button"
+                          className="p-1 mr-1 rounded opacity-0 group-hover:opacity-100 hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-opacity"
+                          title="Remove from saved policies"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            removePolicyPath(p.path);
+                            setSavedPolicies(getSavedPolicies());
+                          }}
+                        >
+                          <Trash2 className="h-3 w-3" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
             <p className="text-xs text-muted-foreground">
               Local folder path or HuggingFace repo ID of the trained policy.
             </p>

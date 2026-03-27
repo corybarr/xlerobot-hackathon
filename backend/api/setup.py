@@ -60,8 +60,8 @@ async def list_cameras(exclude_builtin: bool = False):
     try:
         # Stop any active MJPEG streams first — the scan opens cv2.VideoCapture
         # for each index, which conflicts with streams in the same process.
-        _stop_all_streams()
-        return camera_scanner.list_cameras(exclude_builtin=exclude_builtin)
+        await asyncio.to_thread(_stop_all_streams)
+        return await asyncio.to_thread(camera_scanner.list_cameras, exclude_builtin)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to list cameras: {e}")
 
@@ -74,7 +74,9 @@ async def capture_camera_previews(camera_indices: List[int] = None):
         camera_indices: Optional list of camera indices to capture. If None, captures all.
     """
     try:
-        return camera_scanner.capture_preview(camera_indices=camera_indices)
+        return await asyncio.to_thread(
+            camera_scanner.capture_preview, camera_indices
+        )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to capture previews: {e}")
 
@@ -185,6 +187,9 @@ def _camera_worker(index: int, queue: mp.Queue, stop_event: mp.Event) -> None:
     import time
 
     cap = cv2.VideoCapture(index)
+    if not cap.isOpened():
+        # Camera unavailable (e.g. held by teleoperation subprocess) — exit cleanly
+        return
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
     while not stop_event.is_set():
@@ -202,6 +207,9 @@ def _camera_worker(index: int, queue: mp.Queue, stop_event: mp.Event) -> None:
                 queue.put_nowait(data)
             except Exception:
                 pass
+        else:
+            # Camera read failed — exit
+            break
         time.sleep(1 / 15)
     cap.release()
 
@@ -259,9 +267,12 @@ class _CameraStream:
         if self._stop_event is not None:
             self._stop_event.set()
         if self._process is not None:
-            self._process.join(timeout=3)
+            # Give the process a brief moment to exit cleanly, then kill it.
+            # Use a short timeout (0.5s) to avoid blocking threads/event loop.
+            self._process.join(timeout=0.5)
             if self._process.is_alive():
                 self._process.kill()
+                self._process.join(timeout=1)
             self._process = None
         self._frame = None
 
@@ -283,10 +294,21 @@ def _get_camera_stream(index: int) -> _CameraStream:
 
 def _stop_all_streams() -> None:
     """Stop all active MJPEG streams and wait for subprocesses to release cameras."""
+    # Collect and clear under the lock, but stop outside it to avoid
+    # holding _streams_lock for seconds while process.join() blocks.
     with _streams_lock:
-        for stream in _camera_streams.values():
-            stream._stop()
+        streams = list(_camera_streams.values())
         _camera_streams.clear()
+    for stream in streams:
+        stream._stop()
+
+
+def _stop_single_stream(index: int) -> None:
+    """Stop a single camera stream by index."""
+    with _streams_lock:
+        stream = _camera_streams.pop(index, None)
+    if stream:
+        stream._stop()
 
 
 @router.post("/cameras/streams/stop")
@@ -300,11 +322,23 @@ async def stop_all_camera_streams():
     return {"message": "All camera streams stopped"}
 
 
+@router.post("/cameras/stream/{camera_index}/stop")
+async def stop_camera_stream(camera_index: int):
+    """Stop a single camera MJPEG stream.
+
+    Called by the frontend when a camera feed component unmounts to ensure the
+    capture subprocess is cleaned up even if the proxy doesn't propagate the
+    HTTP disconnect.
+    """
+    await asyncio.to_thread(_stop_single_stream, camera_index)
+    return {"message": f"Camera stream {camera_index} stopped"}
+
+
 @router.get("/cameras/stream/{camera_index}")
 async def stream_camera(camera_index: int):
     """MJPEG stream for a camera. The browser renders this natively via <img src=...>."""
-    stream = _get_camera_stream(camera_index)
-    stream.add_client()
+    stream = await asyncio.to_thread(_get_camera_stream, camera_index)
+    await asyncio.to_thread(stream.add_client)
 
     async def generate():
         try:
@@ -323,7 +357,7 @@ async def stream_camera(camera_index: int):
                     )
                 await asyncio.sleep(1 / 15)
         finally:
-            stream.remove_client()
+            await asyncio.to_thread(stream.remove_client)
 
     return StreamingResponse(
         generate(),

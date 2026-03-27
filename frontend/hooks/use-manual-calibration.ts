@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 const WS_BASE = process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:8000";
 
@@ -172,6 +172,16 @@ export function useManualCalibration() {
       wsRef.current = null;
     }
     setState(INITIAL_STATE);
+  }, []);
+
+  // Clean up WebSocket on unmount so port locks are released
+  useEffect(() => {
+    return () => {
+      if (wsRef.current) {
+        wsRef.current.close();
+        wsRef.current = null;
+      }
+    };
   }, []);
 
   return { state, connect, setHoming, startRecording, stopAndSave, disconnect, reset };
