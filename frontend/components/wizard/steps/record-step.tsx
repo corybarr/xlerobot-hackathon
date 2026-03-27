@@ -393,7 +393,7 @@ export function RecordStep() {
               <span className="font-medium">Not logged in to HuggingFace.</span>{" "}
               Recording uploads datasets to HuggingFace Hub. Log in by running:{" "}
               <code className="rounded bg-muted px-1.5 py-0.5 text-xs font-mono">
-                huggingface-cli login
+                hf auth login
               </code>{" "}
               in your terminal, then refresh this page.
             </AlertDescription>
