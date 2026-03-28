@@ -2,7 +2,11 @@
 
 Web UI for LeRobot SO101 bimanual robot arms — teleoperation, calibration, and data recording. The UI wraps lerobot CLI commands and does not modify the lerobot codebase.
 
-**This README covers installation of the UI only.** Install and configure [lerobot](https://github.com/huggingface/lerobot) separately (see [Lerobot installation](https://github.com/huggingface/lerobot#installation)).
+<div align="center">
+  <img src="assets/first_page.png" alt="MakerMods LeRobot UI" width="80%"/>
+</div>
+
+**This README covers installation of the UI only.** Install and configure [lerobot-MakerMods](https://github.com/Maker-Mods/lerobot-MakerMods) first (see [installation instructions](https://github.com/Maker-Mods/lerobot-MakerMods#installation)).
 
 ---
 
@@ -80,7 +84,7 @@ conda activate lerobot   # or: source /path/to/venv/bin/activate
 
 # From the MakerMods-LeRobot-UI repo root
 cd /path/to/MakerMods-LeRobot-UI
-pip install -r requirements_linux.txt
+pip install -r requirements.txt
 ```
 
 **requirements_linux.txt** includes:
