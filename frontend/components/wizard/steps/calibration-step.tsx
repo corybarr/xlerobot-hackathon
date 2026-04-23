@@ -1,9 +1,9 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import Image from "next/image";
 import {
   Loader2,
-  ImageIcon,
   Check,
   CircleDot,
   Circle,
@@ -245,18 +245,20 @@ function NewCalibrationPanel({
         calPhase === "homing" ||
         calPhase === "error") && (
         <>
-          {/* Reference image placeholder */}
-          <div className="flex items-center justify-center rounded-lg border-2 border-dashed border-muted-foreground/25 bg-muted/50 p-8">
-            <div className="text-center text-sm text-muted-foreground">
-              <ImageIcon className="mx-auto mb-2 h-10 w-10 text-muted-foreground/50" />
-              <p>
-                Move the arm to the <strong>middle</strong> of its range of
-                motion before proceeding.
-              </p>
-              <p className="mt-1 text-xs italic">
-                (Reference image coming soon)
-              </p>
-            </div>
+          {/* Reference image */}
+          <div className="flex flex-col items-center gap-3 rounded-lg border bg-muted/30 p-4">
+            <Image
+              src="/lerobot-side.png"
+              alt="SO-101 arm in middle position (side view)"
+              width={800}
+              height={640}
+              className="h-auto w-full max-w-sm object-contain"
+              priority
+            />
+            <p className="text-center text-sm text-muted-foreground">
+              Move the arm to the <strong>middle</strong> of its range of
+              motion, matching the reference above, before proceeding.
+            </p>
           </div>
 
           {/* Connect + Set Homing button */}

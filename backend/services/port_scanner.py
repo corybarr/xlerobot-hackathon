@@ -10,12 +10,14 @@ from backend.models.setup import PortInfo
 def _get_serial_port_globs() -> List[str]:
     """Return glob patterns for serial ports under /dev, per platform.
 
-    - macOS: Feetech/USB serial show up as /dev/cu.usbmodem*
+    - macOS:
+        - /dev/cu.usbmodem*   — native USB-CDC boards (e.g. Waveshare SO-ARM driver board)
+        - /dev/cu.usbserial-* — FTDI USB-to-UART bridge boards
     - Linux: USB serial adapters as /dev/ttyUSB*, USB CDC ACM as /dev/ttyACM*
     """
     system = platform.system()
     if system == "Darwin":
-        return ["cu.usbmodem*"]
+        return ["cu.usbmodem*", "cu.usbserial-*"]
     if system == "Linux":
         return ["ttyUSB*", "ttyACM*"]
     return []
@@ -27,7 +29,7 @@ class PortScannerService:
     def list_ports(self) -> List[PortInfo]:
         """List available serial ports (Feetech motor controllers / SO101 leader/follower).
 
-        On macOS returns /dev/cu.usbmodem*; on Linux returns /dev/ttyUSB* and /dev/ttyACM*.
+        On macOS returns /dev/cu.usbmodem* and /dev/cu.usbserial-*; on Linux returns /dev/ttyUSB* and /dev/ttyACM*.
 
         Returns:
             List of PortInfo objects.
