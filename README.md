@@ -3,7 +3,7 @@
 Web UI for LeRobot SO101 bimanual robot arms — teleoperation, calibration, and data recording. The UI wraps lerobot CLI commands and does not modify the lerobot codebase.
 
 <div align="center">
-  <img src="assets/first_page.png" alt="MakerMods LeRobot UI" width="80%"/>
+  <img src="assets/gui_github.gif" alt="MakerMods LeRobot UI" width="80%"/>
 </div>
 
 **This README covers installation of the UI only.** Install and configure [lerobot-MakerMods](https://github.com/Maker-Mods/lerobot-MakerMods) first (see [installation instructions](https://github.com/Maker-Mods/lerobot-MakerMods#installation)).
