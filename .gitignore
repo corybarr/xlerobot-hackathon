@@ -1,0 +1,26 @@
+# Captured camera frames
+scene.jpg
+scene-*.jpg
+frame-*.jpg
+frames/
+
+# lerobot training/eval outputs
+outputs/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# mkdocs build output
+site/
+
+# Local env / secrets
+.env
+.env.local
