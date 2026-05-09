@@ -19,6 +19,6 @@ node_modules/
 CLAUDE.local.md
 .claude/
 
-# Local backup files (contain personal info)
-hackathon-hub/index.modal-version.html
+# Personal dashboard (kept local, not pushed)
+hackathon-hub/
 
