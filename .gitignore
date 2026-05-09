@@ -1,0 +1,24 @@
+.venv/
+__pycache__/
+*.pyc
+.DS_Store
+.env
+.env.*
+wandb/
+outputs/
+checkpoints/
+*.safetensors
+*.ckpt
+.vscode/
+.idea/
+lerobot-src/
+SO-ARM100/
+lerobot-MakerMods/
+MakerMods-App/
+node_modules/
+CLAUDE.local.md
+.claude/
+
+# Local backup files (contain personal info)
+hackathon-hub/index.modal-version.html
+

@@ -1,0 +1,10 @@
+torch
+transformers
+accelerate
+sentencepiece
+pillow
+numpy
+huggingface_hub
+fastapi
+uvicorn[standard]
+pydantic>=2
