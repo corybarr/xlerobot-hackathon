@@ -93,11 +93,9 @@ app.include_router(training.router, prefix="/api/training", tags=["training"])
 # WebSocket endpoints
 from backend.websockets.logs import router as websocket_router
 from backend.websockets.base_control import router as base_control_ws_router
-from backend.websockets.molmo_logs import router as molmo_ws_router
 
 app.include_router(websocket_router)
 app.include_router(base_control_ws_router)
-app.include_router(molmo_ws_router)
 
 
 def run_server(host: str = "0.0.0.0", port: int = 8000):

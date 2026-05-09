@@ -1,7 +1,6 @@
 "use client";
 
 import Image from "next/image";
-import Link from "next/link";
 import { Brain, Check, Bug } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { STEPS } from "@/lib/wizard-types";
@@ -57,13 +56,17 @@ export function WizardSidebar() {
             </button>
           );
         })}
-        <Link
-          href="/inference"
+        <button
+          type="button"
+          onClick={() => {
+            if (state.debugMode) dispatch({ type: "TOGGLE_DEBUG_MODE" });
+            goToStep(7);
+          }}
           className="mt-3 flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
         >
           <Brain className="h-4 w-4 shrink-0" />
           <span>MolmoAct2 inference</span>
-        </Link>
+        </button>
       </nav>
       <div className="border-t px-4 py-3 flex items-center justify-between">
         <p className="text-xs text-muted-foreground">LeRobot Setup Wizard</p>

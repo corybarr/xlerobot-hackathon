@@ -1,6 +1,6 @@
 # MakerMods LeRobot UI
 
-Web UI for LeRobot SO101 bimanual robot arms — teleoperation, calibration, and data recording. The UI wraps lerobot CLI commands and does not modify the lerobot codebase.
+Web UI for LeRobot SO101 bimanual robot arms — teleoperation, calibration, and data recording. The backend runs the vendored [`lerobot/`](lerobot/) package (includes a MolmoAct2 policy adapter) via subprocess.
 
 <div align="center">
   <img src="assets/gui_github.gif" alt="MakerMods LeRobot UI" width="80%"/>
@@ -53,6 +53,11 @@ chmod +x install.sh
 - Backend runs lerobot CLI via subprocess and serves REST + WebSocket (logs).
 - Frontend proxies `/api/*` and `/ws/*` to the backend (see `frontend/next.config.ts`).
 - Config is stored in `webui_config.json` at the repo root (gitignored).
+
+### Inference (SmolVLA, ACT, MolmoAct2)
+
+- From the **Inference** wizard step, policies run via `lerobot-record` (same subprocess path for all types).
+- **MolmoAct2**: select MolmoAct2 and leave **Policy path** empty to use the bundled adapter directory [`lerobot/src/lerobot/policies/molmoact2/adapter_config`](lerobot/src/lerobot/policies/molmoact2/adapter_config), which loads `allenai/MolmoAct2-SO100_101`. Supports **single-arm** mode only; use two cameras when possible (one view is duplicated if only a single camera is present). Install deps from the `lerobot` folder: `pip install -e ".[molmoact2]"`.
 
 ---
 

@@ -1,6 +1,5 @@
 "use client";
 
-import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   AlertTriangle,
@@ -128,7 +127,6 @@ export function InferenceStep() {
   );
 
   const config = state.inferenceConfig;
-  const isMolmoAct2 = config.modelType === "molmoact2";
 
   // Load saved policies on mount
   useEffect(() => {
@@ -221,12 +219,14 @@ export function InferenceStep() {
 
   const canStart =
     hardwareReady &&
-    config.policyPath.trim() !== "" &&
+    (config.modelType === "molmoact2" || config.policyPath.trim() !== "") &&
     config.repoId.trim() !== "" &&
     config.task.trim() !== "" &&
     config.numEpisodes > 0 &&
     config.episodeTimeS > 0 &&
-    (config.modelType === "act" || config.modelType === "smolvla");
+    (config.modelType === "act" ||
+      config.modelType === "smolvla" ||
+      config.modelType === "molmoact2");
 
   async function handleStart() {
     setStarting(true);
@@ -321,31 +321,6 @@ export function InferenceStep() {
             </Select>
           </div>
 
-          {isMolmoAct2 && (
-            <Alert>
-              <AlertDescription className="space-y-3">
-                <p>
-                  MolmoAct2 runs in a dedicated flow (in-process model + control
-                  loop). Use the MolmoAct2 page to load{" "}
-                  <code className="rounded bg-muted px-1 py-0.5 text-xs font-mono">
-                    allenai/MolmoAct2-SO100_101
-                  </code>{" "}
-                  and start inference.
-                </p>
-                <Button asChild disabled={!hardwareReady}>
-                  <Link href="/inference">Open MolmoAct2 inference</Link>
-                </Button>
-                {!hardwareReady && (
-                  <p className="text-xs text-muted-foreground">
-                    Complete robot setup through calibration first.
-                  </p>
-                )}
-              </AlertDescription>
-            </Alert>
-          )}
-
-          {!isMolmoAct2 && (
-            <>
           {/* Policy path */}
           <div className="space-y-1.5">
             <Label htmlFor="policy-path">Policy Path</Label>
@@ -414,6 +389,12 @@ export function InferenceStep() {
             </div>
             <p className="text-xs text-muted-foreground">
               Local folder path or HuggingFace repo ID of the trained policy.
+              For MolmoAct2, leave empty to use the bundled adapter (
+              <code className="rounded bg-muted px-0.5 font-mono text-[10px]">
+                allenai/MolmoAct2-SO100_101
+              </code>
+              ). Prefer two camera views; a single view is duplicated for the
+              model.
             </p>
           </div>
 
@@ -518,15 +499,13 @@ export function InferenceStep() {
               Display data during inference
             </Label>
           </div>
-            </>
-          )}
         </div>
 
         <Separator />
 
         {/* Start / Stop */}
         <div className="flex items-center gap-2">
-          {!isMolmoAct2 && !isRunning && !errorMsg && (
+          {!isRunning && !errorMsg && (
             <Button onClick={handleStart} disabled={starting || !canStart}>
               {starting ? (
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />

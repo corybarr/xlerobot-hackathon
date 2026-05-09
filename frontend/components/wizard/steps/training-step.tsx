@@ -1,6 +1,5 @@
 "use client";
 
-import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   AlertTriangle,
@@ -520,12 +519,11 @@ export function TrainingStep() {
                   <code className="rounded bg-muted px-1 py-0.5 text-xs font-mono">
                     {DEFAULT_MODEL_IDS.molmoact2}
                   </code>
-                  ). This step submits cloud jobs through Qualia for ACT / SmolVLA
-                  only — run MolmoAct2 on the robot from the dedicated inference page.
+                  ). Cloud training through Qualia applies to ACT / SmolVLA
+                  only. Run MolmoAct2 on the robot from the wizard{" "}
+                  <strong>Inference</strong> step (policy model: MolmoAct2;
+                  optional policy path uses the bundled adapter when left blank).
                 </p>
-                <Button asChild variant="outline" size="sm">
-                  <Link href="/inference">Open MolmoAct2 inference</Link>
-                </Button>
               </AlertDescription>
             </Alert>
           )}

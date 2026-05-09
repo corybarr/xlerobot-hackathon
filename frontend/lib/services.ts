@@ -271,6 +271,7 @@ export const services = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         policy_path: config.policyPath,
+        model_type: config.modelType,
         repo_id: config.repoId,
         single_task: config.task,
         num_episodes: config.numEpisodes,
