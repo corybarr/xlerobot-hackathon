@@ -54,37 +54,57 @@ echo "==> Deploying proxy code"
 ssh "${SPARK_HOST}" "mkdir -p ~/gemma-proxy"
 scp -q "${PROXY_FILE}" "${SPARK_HOST}:~/gemma-proxy/gemma_proxy.py"
 
-echo "==> Stopping any existing proxy belonging to \$USER"
-ssh "${SPARK_HOST}" "pkill -u \$USER -f 'python.*gemma_proxy.py' 2>/dev/null; sleep 0.5; echo '  done'"
+echo "==> Stopping any existing proxy (via pidfile, avoids pkill self-match)"
+ssh "${SPARK_HOST}" '
+  PF=~/gemma-proxy/proxy.pid
+  if [ -f "$PF" ]; then
+    PID=$(cat "$PF" 2>/dev/null || true)
+    if [ -n "$PID" ] && kill -0 "$PID" 2>/dev/null; then
+      kill "$PID" 2>/dev/null || true
+      sleep 0.5
+      kill -0 "$PID" 2>/dev/null && kill -9 "$PID" 2>/dev/null || true
+    fi
+    rm -f "$PF"
+  fi
+  echo "  done"
+'
 
 echo "==> Starting proxy (nohup, logs to ~/gemma-proxy/proxy.log)"
-# Heredoc keeps the token on the remote side only; never echoed in our local logs.
-ssh "${SPARK_HOST}" "PROXY_TOKEN='${PROXY_TOKEN}' PROXY_PORT='${PROXY_PORT}' ALLOWED_MODEL='${ALLOWED_MODEL}' nohup python3 ~/gemma-proxy/gemma_proxy.py > ~/gemma-proxy/proxy.log 2>&1 &"
+ssh "${SPARK_HOST}" "PROXY_TOKEN='${PROXY_TOKEN}' PROXY_PORT='${PROXY_PORT}' ALLOWED_MODEL='${ALLOWED_MODEL}' nohup python3 ~/gemma-proxy/gemma_proxy.py > ~/gemma-proxy/proxy.log 2>&1 & echo \$! > ~/gemma-proxy/proxy.pid"
 sleep 1.5
 
-echo "==> Smoke test"
+echo "==> Smoke test (from Spark itself — proxy is on the LAN-side IP)"
 SPARK_IP="$(ssh "${SPARK_HOST}" "ip -4 addr show | awk '/inet / && !/127.0/ {print \$2}' | cut -d/ -f1 | head -1")"
 URL="http://${SPARK_IP}:${PROXY_PORT}"
-RESP="$(curl -s --max-time 5 -H "Authorization: Bearer ${PROXY_TOKEN}" "${URL}/api/tags" || true)"
-if echo "${RESP}" | grep -q "${ALLOWED_MODEL}"; then
+SMOKE_RESP="$(ssh "${SPARK_HOST}" "curl -s --max-time 5 -H 'Authorization: Bearer ${PROXY_TOKEN}' http://localhost:${PROXY_PORT}/api/tags" || true)"
+SMOKE_OK=0
+if echo "${SMOKE_RESP}" | grep -q "${ALLOWED_MODEL}"; then
+  SMOKE_OK=1
   echo "  smoke: ok — proxy returned ${ALLOWED_MODEL}"
 else
-  echo "  smoke: FAILED. last 20 lines of proxy.log:" >&2
-  ssh "${SPARK_HOST}" "tail -20 ~/gemma-proxy/proxy.log" >&2
-  exit 4
+  echo "  smoke: FAILED. response:" >&2
+  echo "    ${SMOKE_RESP}" >&2
+  echo "  last 20 lines of proxy.log:" >&2
+  ssh "${SPARK_HOST}" "tail -20 ~/gemma-proxy/proxy.log 2>&1 || true" >&2
 fi
 
+# Always print the token — even if the smoke test failed, the token is still
+# valid and you may need it to debug or re-test manually.
 cat <<EOF
 
-✓ gemma-proxy live at ${URL}
-  model: ${ALLOWED_MODEL}
-  token: ${PROXY_TOKEN}
+gemma-proxy on Spark
+  url:      ${URL}      (LAN — direct from same-network team members)
+  also at:  http://localhost:${PROXY_PORT}      (after: ssh -fNL ${PROXY_PORT}:localhost:${PROXY_PORT} ${SPARK_HOST})
+  model:    ${ALLOWED_MODEL}
+  token:    ${PROXY_TOKEN}
 
-Share with team:
-
-  export OLLAMA_HOST="${URL}"
+Use from a client (orchestrator/watcher/ask all read these env vars):
+  export OLLAMA_HOST="${URL}"            # or http://localhost:${PROXY_PORT} via tunnel
   export GEMMA_PROXY_TOKEN="${PROXY_TOKEN}"
 
-To rotate the token: re-run this script (or pass PROXY_TOKEN=newvalue).
-To stop: ssh ${SPARK_HOST} "pkill -u \$USER -f gemma_proxy.py"
+Rotate the token:  ./scripts/rotate_gemma_token.sh
+Stop the proxy:    ssh ${SPARK_HOST} 'kill \$(cat ~/gemma-proxy/proxy.pid)'
+
 EOF
+
+[ "${SMOKE_OK}" = "1" ] || exit 4
