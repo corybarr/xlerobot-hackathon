@@ -87,7 +87,8 @@ Look at the current scene. Respond with JSON only, schema:
         "stream": False,
         "format": "json",
     }
-    r = requests.post(f"{orch.OLLAMA_HOST}/api/generate", json=payload, timeout=120)
+    headers = {"Authorization": f"Bearer {orch.GEMMA_PROXY_TOKEN}"} if orch.GEMMA_PROXY_TOKEN else {}
+    r = requests.post(f"{orch.OLLAMA_HOST}/api/generate", json=payload, headers=headers, timeout=120)
     r.raise_for_status()
     return json.loads(r.json().get("response", "{}"))
 

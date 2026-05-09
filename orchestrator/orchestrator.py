@@ -49,6 +49,7 @@ import yaml
 
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
 GEMMA_MODEL = os.getenv("GEMMA_MODEL", "gemma3:27b")
+GEMMA_PROXY_TOKEN = os.getenv("GEMMA_PROXY_TOKEN", "")
 CAMERA_INDEX = int(os.getenv("CAMERA_INDEX", "1"))
 GOAL = os.getenv("GOAL", "set the table")
 HF_USER = os.getenv("HF_USER", "Globalmysterysnailrevolution")
@@ -89,7 +90,10 @@ def capture_frame(camera_index: int) -> bytes:
 
 
 def _gemma_call(images: list[bytes], prompt: str, timeout: int = 60) -> dict:
-    """Call Gemma with one or more images + prompt. Returns parsed JSON."""
+    """Call Gemma with one or more images + prompt. Returns parsed JSON.
+    If GEMMA_PROXY_TOKEN is set, sends as Bearer auth (for the gemma-proxy
+    on Spark). Otherwise hits Ollama directly without auth.
+    """
     payload = {
         "model": GEMMA_MODEL,
         "prompt": prompt,
@@ -97,7 +101,8 @@ def _gemma_call(images: list[bytes], prompt: str, timeout: int = 60) -> dict:
         "stream": False,
         "format": "json",
     }
-    r = requests.post(f"{OLLAMA_HOST}/api/generate", json=payload, timeout=timeout)
+    headers = {"Authorization": f"Bearer {GEMMA_PROXY_TOKEN}"} if GEMMA_PROXY_TOKEN else {}
+    r = requests.post(f"{OLLAMA_HOST}/api/generate", json=payload, headers=headers, timeout=timeout)
     r.raise_for_status()
     return json.loads(r.json().get("response", "{}"))
 

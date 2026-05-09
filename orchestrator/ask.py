@@ -50,7 +50,8 @@ def main() -> int:
         "images": [base64.b64encode(img).decode()],
         "stream": False,
     }
-    r = requests.post(f"{orch.OLLAMA_HOST}/api/generate", json=payload, timeout=180)
+    headers = {"Authorization": f"Bearer {orch.GEMMA_PROXY_TOKEN}"} if orch.GEMMA_PROXY_TOKEN else {}
+    r = requests.post(f"{orch.OLLAMA_HOST}/api/generate", json=payload, headers=headers, timeout=180)
     r.raise_for_status()
     print(r.json().get("response", "").strip())
     return 0
