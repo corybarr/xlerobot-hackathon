@@ -1,0 +1,40 @@
+# Discrete skills for the "Set the Table" track.
+# Each entry is a single low-level VLA target — Gemma chooses among them.
+#
+# Consumed by:
+#   scripts/record_skill.sh  -> task description + episode time for lerobot-record
+#   scripts/train_skill.sh   -> dataset repo lookup (HF_USER/xlerobot-<skill>)
+#   orchestrator/orchestrator.py -> available-actions list given to Gemma
+#
+# Add new skills as you record them. Keep descriptions short, action-focused,
+# and self-contained (they become the language instruction for SmolVLA/ACT).
+
+remove_fork_from_cup:
+  description: "Remove the fork from the cup and lift it clear"
+  episode_time_s: 15
+  preconditions: "Fork is in the cup, gripper is open"
+  postconditions: "Fork is held in gripper, lifted above the cup"
+
+place_fork:
+  description: "Place the fork at its setting position on the table"
+  episode_time_s: 15
+  preconditions: "Fork is held in gripper, gripper is over the place setting"
+  postconditions: "Fork is on the table at the setting position, gripper released"
+
+move_cup:
+  description: "Move the cup to the upper-right of the place setting"
+  episode_time_s: 15
+  preconditions: "Cup is on the table, gripper is open"
+  postconditions: "Cup is in the upper-right region of the place setting"
+
+pick_up_plate:
+  description: "Pick up the plate from the stack"
+  episode_time_s: 20
+  preconditions: "Plate is on the stack, gripper is open"
+  postconditions: "Plate is held in gripper, lifted clear of the stack"
+
+place_plate:
+  description: "Place the plate at the center of the place setting"
+  episode_time_s: 20
+  preconditions: "Plate is held in gripper, positioned over the setting"
+  postconditions: "Plate is centered on the setting, gripper released"
