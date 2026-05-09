@@ -55,3 +55,7 @@ class Config(BaseModel):
     single_arm: SingleArmConfig = Field(default_factory=SingleArmConfig)
     bimanual: BimanualConfig = Field(default_factory=BimanualConfig)
     last_recording: LastRecordingConfig = Field(default_factory=LastRecordingConfig)
+    remote_inference_host: Optional[str] = Field(
+        None,
+        description="Optional host (IP:port) for future remote GPU inference worker; local load when empty",
+    )

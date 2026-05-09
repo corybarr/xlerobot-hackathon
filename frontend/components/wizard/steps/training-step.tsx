@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   AlertTriangle,
@@ -250,7 +251,9 @@ export function TrainingStep() {
   const needsModelId = (VLA_TYPES_REQUIRING_MODEL_ID as readonly string[]).includes(
     trainingConfig.vlaType
   );
+  const isMolmoAct2Training = trainingConfig.vlaType === "molmoact2";
   const canSubmit =
+    !isMolmoAct2Training &&
     keyValid &&
     trainingConfig.datasetId &&
     trainingConfig.instanceType &&
@@ -479,8 +482,9 @@ export function TrainingStep() {
                 disabled={!model.supported}
                 onClick={() => {
                   const updates: Partial<typeof trainingConfig> = { vlaType: model.value };
-                  // Auto-fill default base model ID for types that require it
-                  if ((VLA_TYPES_REQUIRING_MODEL_ID as readonly string[]).includes(model.value)) {
+                  if (model.value === "molmoact2") {
+                    updates.modelId = DEFAULT_MODEL_IDS.molmoact2 || "";
+                  } else if ((VLA_TYPES_REQUIRING_MODEL_ID as readonly string[]).includes(model.value)) {
                     updates.modelId = DEFAULT_MODEL_IDS[model.value] || "";
                   } else {
                     updates.modelId = "";
@@ -507,6 +511,24 @@ export function TrainingStep() {
               </button>
             ))}
           </div>
+
+          {isMolmoAct2Training && (
+            <Alert className="mt-3">
+              <AlertDescription className="space-y-3">
+                <p>
+                  MolmoAct2 uses the pretrained Allen AI checkpoint (
+                  <code className="rounded bg-muted px-1 py-0.5 text-xs font-mono">
+                    {DEFAULT_MODEL_IDS.molmoact2}
+                  </code>
+                  ). This step submits cloud jobs through Qualia for ACT / SmolVLA
+                  only — run MolmoAct2 on the robot from the dedicated inference page.
+                </p>
+                <Button asChild variant="outline" size="sm">
+                  <Link href="/inference">Open MolmoAct2 inference</Link>
+                </Button>
+              </AlertDescription>
+            </Alert>
+          )}
 
           {/* Base model ID (required for smolvla, pi0, pi05) */}
           {(VLA_TYPES_REQUIRING_MODEL_ID as readonly string[]).includes(trainingConfig.vlaType) && (

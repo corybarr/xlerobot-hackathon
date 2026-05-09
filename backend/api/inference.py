@@ -8,15 +8,33 @@ from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
 
-from backend.models.inference import InferenceRequest, InferenceResponse
+from backend.models.inference import (
+    InferenceRequest,
+    InferenceResponse,
+    MolmoLoadRequest,
+    MolmoStartRequest,
+)
 from backend.models.system import ProcessStatus
 from backend.services.config_manager import ConfigManager
 from backend.services.port_lock_manager import PortInUseError, port_lock_manager
 from backend.services.process_manager import process_manager
 
+from backend.inference import (
+    DEFAULT_MOLMO_MODEL_ID,
+    InferenceLoop,
+    get_inference_loop,
+    get_molmo_engine,
+    set_inference_loop,
+    start_background_load,
+)
+
 router = APIRouter()
 config_manager = ConfigManager()
 logger = logging.getLogger(__name__)
+
+
+def _molmo_not_loaded() -> None:
+    raise HTTPException(status_code=400, detail={"error": "model not loaded"})
 
 
 def build_inference_command(config, request: InferenceRequest) -> list[str]:
@@ -197,3 +215,227 @@ async def get_inference_status(process_id: str):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to get status: {e}")
+
+
+# --- MolmoAct2 (in-process; same router as policy inference) -------------------
+
+
+@router.post("/molmo/load")
+async def inference_molmo_load(body: MolmoLoadRequest):
+    """Load MolmoAct2 weights and run CUDA graph warmup (background thread)."""
+    if body.remote_host and str(body.remote_host).strip():
+        cfg = config_manager.load_config()
+        cfg.remote_inference_host = body.remote_host.strip()
+        config_manager.save_config(cfg)
+        raise HTTPException(
+            status_code=501,
+            detail={
+                "error": "remote_inference_host is stored but remote GPU worker is not implemented yet; "
+                "run the backend on the GPU machine with an empty remote_host, or leave remote_host blank for local load."
+            },
+        )
+
+    cfg = config_manager.load_config()
+    cfg.remote_inference_host = None
+    config_manager.save_config(cfg)
+
+    eng = get_molmo_engine()
+    if eng is not None and eng.is_ready():
+        return {"status": "already_loaded", "message": "MolmoAct2 model is already loaded and ready."}
+
+    tag = start_background_load(DEFAULT_MOLMO_MODEL_ID, body.device)
+    if tag == "already_loaded":
+        return {"status": "already_loaded", "message": "MolmoAct2 model is already loaded and ready."}
+    if tag == "loading_in_progress":
+        return {"status": "loading", "message": "Load already in progress."}
+    return {"status": "loading"}
+
+
+@router.get("/molmo/status")
+async def inference_molmo_status():
+    """MolmoAct2 load / warmup progress."""
+    eng = get_molmo_engine()
+    if eng is None:
+        return {
+            "loaded": False,
+            "ready": False,
+            "device": "",
+            "warmup_progress": 0,
+        }
+    return {
+        "loaded": eng.loaded,
+        "ready": eng.is_ready(),
+        "device": eng.device,
+        "warmup_progress": eng.warmup_progress,
+        "load_error": eng.load_error,
+    }
+
+
+@router.post("/molmo/start")
+async def inference_molmo_start(body: MolmoStartRequest):
+    """Start MolmoAct2 perception–action loop."""
+    eng = get_molmo_engine()
+    if eng is None or not eng.is_ready():
+        _molmo_not_loaded()
+
+    cur = get_inference_loop()
+    if cur is not None:
+        st = cur.get_status()
+        if st.get("running"):
+            raise HTTPException(status_code=409, detail={"error": "inference loop already running"})
+
+    if cur is not None:
+        cur.stop()
+
+    loop = InferenceLoop(
+        eng,
+        camera_indices=body.camera_indices,
+        hz=body.hz,
+        robot_port=body.robot_port if not body.dry_run else "",
+        dry_run=body.dry_run,
+    )
+    set_inference_loop(loop)
+    ok = loop.start(body.task)
+    if not ok:
+        raise HTTPException(status_code=500, detail={"error": "failed to start loop"})
+    return {"status": "started"}
+
+
+@router.post("/molmo/stop")
+async def inference_molmo_stop():
+    """Stop MolmoAct2 control loop (does not unload weights)."""
+    loop = get_inference_loop()
+    if loop is not None:
+        loop.stop()
+    return {"status": "stopped"}
+
+
+@router.get("/molmo/loop_status")
+async def inference_molmo_loop_status():
+    """Live step / latency / last action for MolmoAct2 loop."""
+    eng = get_molmo_engine()
+    if eng is None or not eng.is_ready():
+        _molmo_not_loaded()
+    loop = get_inference_loop()
+    if loop is None:
+        return {
+            "running": False,
+            "step_count": 0,
+            "last_action": None,
+            "last_latency_ms": 0.0,
+            "task": "",
+            "action_dim": 0,
+        }
+    return loop.get_status()
+
+
+# --- MolmoAct2 (in-process; same router as policy inference) -------------------
+
+
+@router.post("/molmo/load")
+async def inference_molmo_load(body: MolmoLoadRequest):
+    """Load MolmoAct2 weights and run CUDA graph warmup (background thread)."""
+    if body.remote_host and str(body.remote_host).strip():
+        cfg = config_manager.load_config()
+        cfg.remote_inference_host = body.remote_host.strip()
+        config_manager.save_config(cfg)
+        raise HTTPException(
+            status_code=501,
+            detail={
+                "error": "remote_inference_host is stored but remote GPU worker is not implemented yet; "
+                "run the backend on the GPU machine with an empty remote_host, or leave remote_host blank for local load."
+            },
+        )
+
+    cfg = config_manager.load_config()
+    cfg.remote_inference_host = None
+    config_manager.save_config(cfg)
+
+    eng = get_molmo_engine()
+    if eng is not None and eng.is_ready():
+        return {"status": "already_loaded", "message": "MolmoAct2 model is already loaded and ready."}
+
+    tag = start_background_load(DEFAULT_MOLMO_MODEL_ID, body.device)
+    if tag == "already_loaded":
+        return {"status": "already_loaded", "message": "MolmoAct2 model is already loaded and ready."}
+    if tag == "loading_in_progress":
+        return {"status": "loading", "message": "Load already in progress."}
+    return {"status": "loading"}
+
+
+@router.get("/molmo/status")
+async def inference_molmo_status():
+    """MolmoAct2 load / warmup progress."""
+    eng = get_molmo_engine()
+    if eng is None:
+        return {
+            "loaded": False,
+            "ready": False,
+            "device": "",
+            "warmup_progress": 0,
+        }
+    return {
+        "loaded": eng.loaded,
+        "ready": eng.is_ready(),
+        "device": eng.device,
+        "warmup_progress": eng.warmup_progress,
+        "load_error": eng.load_error,
+    }
+
+
+@router.post("/molmo/start")
+async def inference_molmo_start(body: MolmoStartRequest):
+    """Start MolmoAct2 perception–action loop."""
+    eng = get_molmo_engine()
+    if eng is None or not eng.is_ready():
+        _molmo_not_loaded()
+
+    cur = get_inference_loop()
+    if cur is not None:
+        st = cur.get_status()
+        if st.get("running"):
+            raise HTTPException(status_code=409, detail={"error": "inference loop already running"})
+
+    if cur is not None:
+        cur.stop()
+
+    loop = InferenceLoop(
+        eng,
+        camera_indices=body.camera_indices,
+        hz=body.hz,
+        robot_port=body.robot_port if not body.dry_run else "",
+        dry_run=body.dry_run,
+    )
+    set_inference_loop(loop)
+    ok = loop.start(body.task)
+    if not ok:
+        raise HTTPException(status_code=500, detail={"error": "failed to start loop"})
+    return {"status": "started"}
+
+
+@router.post("/molmo/stop")
+async def inference_molmo_stop():
+    """Stop MolmoAct2 control loop (does not unload weights)."""
+    loop = get_inference_loop()
+    if loop is not None:
+        loop.stop()
+    return {"status": "stopped"}
+
+
+@router.get("/molmo/loop_status")
+async def inference_molmo_loop_status():
+    """Live step / latency / last action for MolmoAct2 loop."""
+    eng = get_molmo_engine()
+    if eng is None or not eng.is_ready():
+        _molmo_not_loaded()
+    loop = get_inference_loop()
+    if loop is None:
+        return {
+            "running": False,
+            "step_count": 0,
+            "last_action": None,
+            "last_latency_ms": 0.0,
+            "task": "",
+            "action_dim": 0,
+        }
+    return loop.get_status()

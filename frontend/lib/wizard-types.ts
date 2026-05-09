@@ -54,12 +54,14 @@ export const VLA_TYPES_REQUIRING_MODEL_ID = ["smolvla", "pi0", "pi05"] as const;
 // Default base model IDs per VLA type
 export const DEFAULT_MODEL_IDS: Record<string, string> = {
   smolvla: "lerobot/smolvla_base",
+  molmoact2: "allenai/MolmoAct2-SO100_101",
 };
 
 // Training model options
 export const TRAINING_MODELS = [
   { value: "act", label: "ACT", supported: true },
   { value: "smolvla", label: "SmolVLA", supported: true },
+  { value: "molmoact2", label: "MolmoAct2", supported: true },
   { value: "pi0", label: "Pi0", supported: false, comingSoon: true },
   { value: "pi05", label: "Pi0.5", supported: false, comingSoon: true },
   { value: "gr00t_n1_5", label: "GR00T N1.5", supported: false, comingSoon: true },
@@ -93,13 +95,14 @@ export interface InferenceConfig {
   numEpisodes: number;
   episodeTimeS: number;
   displayData: boolean;
-  modelType: string; // "act" | "smolvla" | "diffusion" etc.
+  modelType: string; // "act" | "smolvla" | "molmoact2" | etc.
 }
 
 // Supported inference model types
 export const INFERENCE_MODELS = [
   { value: "act", label: "ACT", supported: true },
   { value: "smolvla", label: "SmolVLA", supported: true },
+  { value: "molmoact2", label: "MolmoAct2", supported: true },
   { value: "diffusion", label: "Diffusion Policy", supported: false },
   { value: "tdmpc", label: "TD-MPC", supported: false },
   { value: "vqbet", label: "VQ-BeT", supported: false },
