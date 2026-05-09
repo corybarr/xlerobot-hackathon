@@ -121,6 +121,26 @@ def select_next_skill(scene: bytes, goal: str, skills: dict, history: list[StepR
         or "  (none yet)"
     )
 
+    # Pipelined planning: if the background watcher.py is running, it will have
+    # already analyzed the scene and possibly anticipated the next skill while
+    # the previous VLA was executing. Pull that as a hint to confirm or override.
+    watcher_hint = "  (no watcher state available)"
+    watcher_path = REPO_ROOT / "runtime" / "watcher_state.json"
+    if watcher_path.exists():
+        try:
+            ws_full = json.loads(watcher_path.read_text())
+            ws = ws_full.get("analysis", {})
+            age_s = round(time.time() - ws_full.get("ts", time.time()), 1)
+            watcher_hint = (
+                f"  scene: {ws.get('scene_description', '—')}\n"
+                f"  anticipated next: {ws.get('anticipated_next_skill', '—')} "
+                f"({ws.get('anticipation_reason', '—')})\n"
+                f"  concerns: {ws.get('concerns', [])}\n"
+                f"  state age: {age_s}s"
+            )
+        except Exception as e:
+            watcher_hint = f"  (watcher state unreadable: {type(e).__name__})"
+
     prompt = f"""You are a robot task planner. Look at the current scene and pick the next single skill.
 
 Goal: "{goal}"
@@ -131,7 +151,10 @@ Available skills (each is a separately trained VLA you can invoke):
 History (most recent last):
 {history_brief}
 
-Pick the skill whose preconditions match the current scene AND whose postconditions move you toward the goal. Avoid repeating a skill that just succeeded — its postconditions are now the new state.
+Concurrent watcher (a separate Gemma loop watching the scene; may be a few seconds stale):
+{watcher_hint}
+
+Pick the skill whose preconditions match the current scene AND whose postconditions move you toward the goal. The watcher's anticipation is a hint — confirm it if it matches the live scene, override if you see something different. Avoid repeating a skill that just succeeded.
 
 Respond with JSON only. Schema:
   {{"done": true,  "reason": "<one sentence why complete>"}}

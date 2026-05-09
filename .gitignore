@@ -4,6 +4,9 @@ scene-*.jpg
 frame-*.jpg
 frames/
 
+# Watcher / orchestrator runtime state
+runtime/
+
 # lerobot training/eval outputs
 outputs/
 
