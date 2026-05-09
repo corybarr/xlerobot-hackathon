@@ -1,6 +1,6 @@
 [submodule "MakerMods-App"]
 	path = MakerMods-App
-	url = https://github.com/Maker-Mods/MakerMods-App.git
+	url = https://github.com/LamaSu/MakerMods-App.git
 [submodule "lerobot-MakerMods"]
 	path = lerobot-MakerMods
 	url = https://github.com/Maker-Mods/lerobot-MakerMods.git
