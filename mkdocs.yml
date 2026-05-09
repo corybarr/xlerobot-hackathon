@@ -1,0 +1,32 @@
+site_name: xlerobot-hackathon wiki
+site_description: Team docs for Physical AI Hack World Tour
+docs_dir: wiki
+site_dir: site
+
+theme:
+  name: material
+  features:
+    - navigation.instant
+    - navigation.tracking
+    - navigation.sections
+    - content.code.copy
+  palette:
+    - scheme: default
+      primary: indigo
+      accent: indigo
+    - scheme: slate
+      primary: indigo
+      accent: indigo
+
+nav:
+  - Home: index.md
+  - Training plan: training-plan.md
+  - Data collection plan: data-collection-plan.md
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
+  - tables
+  - toc:
+      permalink: true

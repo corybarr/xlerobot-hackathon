@@ -1,0 +1,22 @@
+[site]
+name = "xlerobot-hackathon wiki"
+description = "Team docs for Physical AI Hack World Tour"
+
+[build]
+docs_dir = "wiki"
+site_dir = "site"
+
+[theme]
+name = "material"
+
+[[nav]]
+title = "Home"
+file = "index.md"
+
+[[nav]]
+title = "Training plan"
+file = "training-plan.md"
+
+[[nav]]
+title = "Data collection plan"
+file = "data-collection-plan.md"
