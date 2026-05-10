@@ -29,10 +29,10 @@ pick_cutlery:
   preconditions: "Cutlery is on the table within reach, gripper is open"
   postconditions: "Cutlery is held in gripper, lifted clear of the table surface"
   vla:
-    backend: kiteml
-    uri: null   # filled in after KiteML job e939d99e-cc48-4996-84ed-b969a9af30c4 completes
-    job_id: e939d99e-cc48-4996-84ed-b969a9af30c4
+    backend: smolvla
+    uri: Globalmysterysnailrevolution/xlerobot-pick-cutlery-smolvla
     dataset_uri: Globalmysterysnailrevolution/xlerobot-pick-cutlery-20ep
+    notes: trained on Spark, 5000 steps, batch=4, full fine-tune.
 
 pick_bowl:
   description: "Pick up the bowl from the table"
