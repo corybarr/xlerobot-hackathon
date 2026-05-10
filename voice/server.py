@@ -170,26 +170,59 @@ def create_app(settings: Optional[VoiceSettings] = None) -> FastAPI:
     # ── Tool webhook (Vapi native shape) ─────────────────────────────
     @app.post("/api/tools")
     async def vapi_tool_webhook(request: Request) -> JSONResponse:
-        """Vapi POSTs the full ``message`` payload here. We dispatch each
-        ``toolCallList`` entry, return ``results`` Vapi unpacks into the
-        LLM context."""
-        body = await request.json()
+        """Vapi POSTs tool calls here in various shapes depending on its
+        API version. We accept all of them and never return 4xx, because
+        Vapi treats a non-200 as 'call broken' and ends the call."""
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+
+        # Vapi sends ONE of these shapes (observed across API versions):
+        #   {"message": {"toolCallList": [...]}}              # current native
+        #   {"message": {"toolCalls": [...]}}                 # alt camelCase
+        #   {"message": {"tool_calls": [...]}}                # alt snake_case
+        #   {"toolCallList": [...]}                           # un-wrapped
+        #   {"toolCalls": [...]}                              # un-wrapped alt
+        # OpenAI style each item: {"id", "function": {"name", "arguments"}}
+        # Older flat:             {"id", "name", "arguments"}
         msg = (body or {}).get("message") or body or {}
-        tool_calls = msg.get("toolCallList") or msg.get("tool_calls") or []
+        tool_calls = (
+            msg.get("toolCallList")
+            or msg.get("toolCalls")
+            or msg.get("tool_calls")
+            or body.get("toolCallList")
+            or body.get("toolCalls")
+            or body.get("tool_calls")
+            or []
+        )
+
         if not isinstance(tool_calls, list) or not tool_calls:
-            return JSONResponse({"error": "no toolCallList in payload"}, status_code=400)
+            # Don't 400 — log the raw payload so we can see what Vapi sent,
+            # and return an empty results array so the call stays alive.
+            logger.warning(
+                "Vapi webhook hit /api/tools with no toolCalls extractable; raw body="
+                + json.dumps(body)[:1500]
+            )
+            return JSONResponse({"results": []})
 
         tools = _get_tools()
         results = []
         for call in tool_calls:
             cid = call.get("id") or call.get("toolCallId") or "(none)"
-            name = call.get("name") or (call.get("function") or {}).get("name")
-            args = call.get("arguments") or (call.get("function") or {}).get("arguments") or {}
+            fn = call.get("function") or {}
+            name = call.get("name") or fn.get("name")
+            args = call.get("arguments")
+            if args is None:
+                args = fn.get("arguments")
             if isinstance(args, str):
                 try:
                     args = json.loads(args)
                 except Exception:
                     args = {}
+            if not isinstance(args, dict):
+                args = {}
+            logger.info("vapi tool call: id={} name={} args={}", cid, name, args)
             res = await _dispatch_one(tools, name, args)
             results.append({"toolCallId": cid, "result": res})
 
