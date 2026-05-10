@@ -266,6 +266,172 @@ def cmd_calibrate_stop(args):
 
 
 # ---------------------------------------------------------------------------
+# Manual calibration via WebSocket (4-phase interactive flow)
+# ---------------------------------------------------------------------------
+
+async def _manual_cal_loop(port: str, device_id: str, device_type: str, robot_type: str) -> int:
+    try:
+        import websockets
+    except ImportError:
+        print(f"{RED}websockets package missing. install: pip install websockets{RESET}", file=sys.stderr)
+        return 1
+
+    ws_url = MM_HOST.replace("http://", "ws://").replace("https://", "wss://").rstrip("/") + "/api/calibration/manual/ws"
+    print(f"{DIM}--- connecting to {ws_url} ---{RESET}")
+
+    async with websockets.connect(ws_url, ping_interval=20, max_size=10_000_000) as ws:
+        # Phase 1: open session
+        await ws.send(json.dumps({
+            "action": "start",
+            "port": port,
+            "device_type": device_type,
+            "robot_type": robot_type,
+            "device_id": device_id,
+        }))
+        msg = json.loads(await ws.recv())
+        if msg.get("type") == "error":
+            print(f"{RED}error: {msg.get('message')}{RESET}", file=sys.stderr)
+            return 1
+        motors = msg.get("motors", [])
+        print(f"  {GREEN}connected.{RESET}  motors ({len(motors)}): {motors}")
+        print()
+
+        # Phase 2: set homing — user positions arm to middle
+        print(f"  {CYAN}STEP 1{RESET}: Position the arm in its MIDDLE pose.")
+        print(f"          Each joint centered. Arm extended naturally forward.")
+        print(f"          The gripper jaws should be midway between fully open and fully closed.")
+        await asyncio.to_thread(input, "          press Enter when ready: ")
+
+        await ws.send(json.dumps({"action": "set_homing"}))
+        msg = json.loads(await ws.recv())
+        if msg.get("type") == "error":
+            print(f"{RED}error setting homing: {msg.get('message')}{RESET}", file=sys.stderr)
+            return 1
+        offsets = msg.get("offsets", {})
+        print(f"  {GREEN}homing offsets set{RESET} for {len(offsets)} motors")
+        print()
+
+        # Phase 3: range recording — user wiggles each joint through full range
+        print(f"  {CYAN}STEP 2{RESET}: Move EACH joint through its full range of motion.")
+        print(f"          Cover both directions for every joint. Open + close the gripper.")
+        print(f"          Live pos + range below. Press Enter when done.")
+        print()
+
+        await ws.send(json.dumps({"action": "start_recording"}))
+        # Acknowledge recording_started
+        msg = json.loads(await ws.recv())
+        if msg.get("type") != "recording_started":
+            print(f"{YELLOW}unexpected msg waiting for recording_started: {msg}{RESET}")
+
+        stop_event = asyncio.Event()
+        latest: dict[str, dict] = {}
+
+        async def watch_stdin():
+            await asyncio.to_thread(input, "")
+            stop_event.set()
+
+        async def receive_positions():
+            while not stop_event.is_set():
+                try:
+                    raw = await asyncio.wait_for(ws.recv(), timeout=0.3)
+                    msg = json.loads(raw)
+                    if msg.get("type") == "positions":
+                        latest.update(msg.get("motors", {}))
+                except asyncio.TimeoutError:
+                    continue
+                except Exception:
+                    break
+
+        async def display():
+            first = True
+            displayed_lines = 0
+            while not stop_event.is_set():
+                await asyncio.sleep(0.15)
+                if not latest:
+                    continue
+                # Cursor: move up to overwrite previous block (in-place refresh)
+                if not first:
+                    sys.stdout.write(f"\033[{displayed_lines}A")
+                first = False
+                lines = []
+                for name, m in latest.items():
+                    pos = m.get("pos", 0)
+                    mn = m.get("min", pos)
+                    mx = m.get("max", pos)
+                    span = mx - mn
+                    bar_len = 32
+                    if mx > mn:
+                        pos_in_bar = max(0, min(bar_len - 1, int((pos - mn) / (mx - mn) * (bar_len - 1))))
+                    else:
+                        pos_in_bar = bar_len // 2
+                    bar = "[" + " " * pos_in_bar + GREEN + "*" + RESET + " " * (bar_len - pos_in_bar - 1) + "]"
+                    span_color = GREEN if span > 500 else (YELLOW if span > 100 else DIM)
+                    lines.append(
+                        f"\033[K  {name:14s} pos={pos:5d}  range=[{mn:5d},{mx:5d}]  "
+                        f"{span_color}span={span:5d}{RESET}  {bar}"
+                    )
+                output = "\n".join(lines) + "\n"
+                sys.stdout.write(output)
+                sys.stdout.flush()
+                displayed_lines = len(lines)
+
+        try:
+            await asyncio.gather(watch_stdin(), receive_positions(), display())
+        except KeyboardInterrupt:
+            stop_event.set()
+
+        # Phase 4: stop recording, save, disconnect
+        print()
+        print(f"  {CYAN}saving calibration...{RESET}")
+        await ws.send(json.dumps({"action": "stop_recording"}))
+
+        # Drain remaining messages until we see 'saved' or hit timeout
+        save_path = None
+        for _ in range(20):
+            try:
+                raw = await asyncio.wait_for(ws.recv(), timeout=2.0)
+                msg = json.loads(raw)
+                if msg.get("type") == "saved":
+                    save_path = msg.get("path")
+                    break
+                if msg.get("type") == "error":
+                    print(f"{RED}save error: {msg.get('message')}{RESET}", file=sys.stderr)
+                    return 1
+            except asyncio.TimeoutError:
+                break
+
+        try:
+            await ws.send(json.dumps({"action": "disconnect"}))
+        except Exception:
+            pass
+
+        if save_path:
+            print(f"  {GREEN}saved at:{RESET} {save_path}")
+            return 0
+        print(f"{YELLOW}calibration completed but no save path returned.{RESET}", file=sys.stderr)
+        return 0
+
+
+def cmd_calibrate_manual(args):
+    # Auto-detect device_type from device_id if not explicit
+    device_type = args.device_type
+    if device_type == "auto":
+        device_type = "teleoperator" if "leader" in args.device_id.lower() else "robot"
+    robot_type = args.type
+    if robot_type == "auto":
+        robot_type = "so101_leader" if device_type == "teleoperator" else "so101_follower"
+
+    print(f"{CYAN}manual cal{RESET}  port={args.port}  device_id={args.device_id}  "
+          f"type={robot_type}  device_type={device_type}")
+    try:
+        rc = asyncio.run(_manual_cal_loop(args.port, args.device_id, device_type, robot_type))
+    except KeyboardInterrupt:
+        print(f"\n{YELLOW}interrupted.{RESET}")
+        rc = 130
+    sys.exit(rc)
+
+
+# ---------------------------------------------------------------------------
 # Subcommands — config
 # ---------------------------------------------------------------------------
 
@@ -378,6 +544,17 @@ def build_parser() -> argparse.ArgumentParser:
     cal_stop = cal.add_parser("stop")
     cal_stop.add_argument("process_id")
     cal_stop.set_defaults(func=cmd_calibrate_stop)
+
+    cal_man = cal.add_parser("manual", help="interactive 4-phase manual calibration via WebSocket")
+    cal_man.add_argument("port")
+    cal_man.add_argument("device_id")
+    cal_man.add_argument("--type", default="auto",
+                         choices=["auto", "so101_leader", "so101_follower"],
+                         help="auto = infer from device_id (default)")
+    cal_man.add_argument("--device-type", default="auto",
+                         choices=["auto", "teleoperator", "robot"],
+                         help="auto = infer from device_id (default)")
+    cal_man.set_defaults(func=cmd_calibrate_manual)
 
     cfg = sub.add_parser("config").add_subparsers(dest="cfg_cmd", required=True)
     cfg.add_parser("show").set_defaults(func=cmd_config_show)
