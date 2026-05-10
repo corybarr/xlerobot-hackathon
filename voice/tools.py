@@ -52,6 +52,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 import cv2
+import httpx
 import requests
 import yaml
 from loguru import logger
@@ -83,6 +84,13 @@ LEROBOT_RECORD_BIN = os.environ.get(
 )
 
 SKILL_TIMEOUT_S = float(os.environ.get("SKILL_TIMEOUT_S", "45.0"))
+
+# Peer split: when this server doesn't own the arm (e.g. it's the tablet
+# that owns the camera + Vapi webhook), arm-related tools proxy to a
+# peer server over the tailnet. Set PEER_ARM_HOST to the peer's URL
+# (e.g. http://100.88.165.68:8765) and pick_*/get_status/cancel_current
+# round-trip there. look_at_scene + list_skills stay local.
+PEER_ARM_HOST = os.environ.get("PEER_ARM_HOST", "").rstrip("/")
 
 
 def _load_skills() -> dict[str, dict[str, Any]]:
@@ -187,31 +195,32 @@ class VoiceTools:
     # ── per-skill convenience tools (one-call dispatch) ──────────────
 
     async def pick_cup(self) -> dict[str, Any]:
-        """Run the trained cup-pick VLA on the arm."""
-        return await self._run_skill("pick_cup")
+        """Run the trained cup-pick VLA on the arm. Proxies to PEER_ARM_HOST when set."""
+        return await self._dispatch_arm("pick_cup")
 
     async def pick_bowl(self) -> dict[str, Any]:
-        """Run the trained bowl-pick VLA on the arm."""
-        return await self._run_skill("pick_bowl")
+        return await self._dispatch_arm("pick_bowl")
 
     async def pick_cutlery(self) -> dict[str, Any]:
-        """Run the trained cutlery-pick VLA on the arm."""
-        return await self._run_skill("pick_cutlery")
+        return await self._dispatch_arm("pick_cutlery")
 
     async def pick_anything(self) -> dict[str, Any]:
-        """Generalist fallback — Mattie's 3-cam fine-tune."""
-        return await self._run_skill("pick_anything")
+        return await self._dispatch_arm("pick_anything")
 
     async def run_skill(self, skill: str) -> dict[str, Any]:
-        """Run ANY skill by name. Use this instead of `pick_*` if Gemma
-        prefers a single tool with an argument."""
+        """Run ANY skill by name. Proxies to PEER_ARM_HOST when set."""
+        if PEER_ARM_HOST:
+            return await self._proxy_to_peer("run_skill", {"skill": skill})
         return await self._run_skill(skill)
 
-    # ── get_status / cancel ──────────────────────────────────────────
+    # ── get_status / cancel — also peer-aware ────────────────────────
 
     async def get_status(self, job_id: str = "") -> dict[str, Any]:
-        """Without ``job_id``: a snapshot of the most-recent / active job.
-        With ``job_id``: that specific job's state."""
+        """When PEER_ARM_HOST is set, the job lives on the peer; proxy.
+        Otherwise return local state."""
+        if PEER_ARM_HOST:
+            return await self._proxy_to_peer("get_status", {"job_id": job_id} if job_id else {})
+
         if job_id:
             job = self._jobs.get(job_id)
             if job is None:
@@ -227,7 +236,10 @@ class VoiceTools:
         return {"state": "idle", "message": "no jobs yet"}
 
     async def cancel_current(self) -> dict[str, Any]:
-        """Best-effort kill any running VLA subprocess."""
+        """Best-effort kill. Proxies to peer when PEER_ARM_HOST is set."""
+        if PEER_ARM_HOST:
+            return await self._proxy_to_peer("cancel_current", {})
+
         self._cancel_flag = True
         proc = self._current_proc
         if proc is not None and proc.poll() is None:
@@ -243,6 +255,37 @@ class VoiceTools:
         return {"ok": True, "killed_pid": None, "note": "nothing was running"}
 
     # ── internal ─────────────────────────────────────────────────────
+
+    async def _dispatch_arm(self, skill: str) -> dict[str, Any]:
+        """Single decision point for arm-related tools: proxy or local."""
+        if PEER_ARM_HOST:
+            return await self._proxy_to_peer(skill, {})
+        return await self._run_skill(skill)
+
+    async def _proxy_to_peer(self, tool: str, args: dict[str, Any]) -> dict[str, Any]:
+        """POST a tool call over the tailnet to the peer server's /api/tools/<tool>.
+
+        Used when this server holds the camera + Vapi webhook but a peer
+        (e.g. Mattie's box on the tailnet) owns the arm USB + lerobot-record.
+        """
+        url = f"{PEER_ARM_HOST}/api/tools/{tool}"
+        try:
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                r = await client.post(url, json=args)
+                if r.status_code >= 400:
+                    return {
+                        "error": f"peer_http_{r.status_code}: {r.text[:200]}",
+                        "where": f"_proxy_to_peer({tool})",
+                        "peer": PEER_ARM_HOST,
+                    }
+                return r.json()
+        except httpx.RequestError as exc:
+            logger.warning("peer proxy to {} failed: {}", url, exc)
+            return {
+                "error": f"peer_unreachable: {exc!s}",
+                "where": f"_proxy_to_peer({tool})",
+                "peer": PEER_ARM_HOST,
+            }
 
     async def _run_skill(self, skill: str) -> dict[str, Any]:
         """Spawn lerobot-record for one skill, return a job_id immediately.
