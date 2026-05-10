@@ -18,10 +18,10 @@ pick_cup:
   preconditions: "Cup is on the table within reach, gripper is open"
   postconditions: "Cup is held in gripper, lifted clear of the table surface"
   vla:
-    backend: kiteml
-    uri: null   # filled in after KiteML job 99197e59-67bf-4663-a5b4-3fb5875880a1 completes
-    job_id: 99197e59-67bf-4663-a5b4-3fb5875880a1
+    backend: smolvla
+    uri: Globalmysterysnailrevolution/xlerobot-pick-cup-smolvla
     dataset_uri: Globalmysterysnailrevolution/xlerobot-pick-cup-20ep
+    notes: trained on Spark (GB10) with lerobot-train, 5000 steps, batch=4, full fine-tune. KiteML attempted first but their training container hits a torchcodec bug.
 
 pick_cutlery:
   description: "Pick up a piece of cutlery (fork, knife, or spoon) from the table"
