@@ -199,14 +199,30 @@ Respond with JSON only. Schema:
 # VLA wrappers — uniform subprocess interface across SmolVLA / ACT / MolmoAct2
 # ---------------------------------------------------------------------------
 
-def build_vla_command(skill_name: str, vla_backend: str) -> list[str]:
+def build_vla_command(skill_name: str, vla_backend: str, skill_meta: dict | None = None) -> list[str]:
     """Construct subprocess command for the chosen (skill, backend) pair.
-    Adding a new backend = add one branch here. The orchestrator main loop
-    is backend-agnostic — it just runs whatever this returns.
-    """
-    policy_repo = f"{HF_USER}/xlerobot-{skill_name}-{vla_backend}"
 
-    if vla_backend in ("smolvla", "act"):
+    Resolution order for the policy URI / repo:
+      1. skill_meta['vla']['uri'] if set (skills.yaml takes precedence)
+      2. Fallback pattern: <HF_USER>/xlerobot-<skill>-<backend>
+
+    The skill's 'vla' block in skills.yaml may also override 'backend'; that
+    lets one skill use kiteml-trained while another uses smolvla.
+    """
+    vla_meta = (skill_meta or {}).get("vla", {}) if skill_meta else {}
+    actual_backend = vla_meta.get("backend") or vla_backend
+    policy_repo = vla_meta.get("uri") or f"{HF_USER}/xlerobot-{skill_name}-{actual_backend}"
+
+    if not policy_repo or policy_repo == "null":
+        raise ValueError(
+            f"No vla.uri set for {skill_name!r}. Train the policy and update skills.yaml first."
+        )
+
+    # smolvla / act / kiteml all produce SmolVLA-or-similar checkpoints loadable
+    # by lerobot-record via --policy.path. The 'kiteml' backend just signals
+    # "this checkpoint was trained on KiteML" — the runtime invocation is the
+    # same once the artifact is pushed to HF Hub.
+    if actual_backend in ("smolvla", "act", "kiteml"):
         return [
             "lerobot-record",
             "--robot.type=so101_follower",
@@ -222,16 +238,14 @@ def build_vla_command(skill_name: str, vla_backend: str) -> list[str]:
             "--dataset.push_to_hub=false",
         ]
 
-    if vla_backend == "molmoact2":
-        # MolmoAct2 has its own runner outside lerobot — wrap your fine-tune
-        # script in orchestrator/molmoact2_runner.py and invoke it here.
+    if actual_backend == "molmoact2":
         return [
             sys.executable, "-m", "orchestrator.molmoact2_runner",
             "--policy", policy_repo,
             "--port", FOLLOWER_PORT,
         ]
 
-    raise ValueError(f"Unknown VLA backend: {vla_backend}")
+    raise ValueError(f"Unknown VLA backend: {actual_backend}")
 
 
 def execute_skill_with_verification(
@@ -245,7 +259,7 @@ def execute_skill_with_verification(
     pre_frame = capture_frame(CAMERA_INDEX)
     print(f"  [{skill_name}] pre-frame captured, invoking {vla_backend}")
 
-    cmd = build_vla_command(skill_name, vla_backend)
+    cmd = build_vla_command(skill_name, vla_backend, skill_meta=skill_meta)
     proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
 
     start = time.time()

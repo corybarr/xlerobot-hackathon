@@ -1,40 +1,43 @@
-# Discrete skills for the "Set the Table" track.
-# Each entry is a single low-level VLA target — Gemma chooses among them.
+# Discrete skills for the Set-the-Table track.
+# Each entry is one trained per-skill VLA — Gemma chooses among them.
 #
 # Consumed by:
-#   scripts/record_skill.sh  -> task description + episode time for lerobot-record
-#   scripts/train_skill.sh   -> dataset repo lookup (HF_USER/xlerobot-<skill>)
-#   orchestrator/orchestrator.py -> available-actions list given to Gemma
+#   scripts/record_skill.sh       -> task description + episode time for lerobot-record
+#   orchestrator/orchestrator.py  -> available-actions list given to Gemma + per-skill VLA invocation
 #
-# Add new skills as you record them. Keep descriptions short, action-focused,
-# and self-contained (they become the language instruction for SmolVLA/ACT).
+# vla.backend selects how the policy is invoked at runtime:
+#   - "kiteml"   : checkpoint trained on KiteML, downloaded to local path or invoked via their API
+#   - "smolvla"  : a vanilla lerobot SmolVLA checkpoint on HF Hub
+#   - "act"      : ACT
+#   - "molmoact2": MolmoAct2 runner (separate)
+# vla.uri is the path/repo for that backend.
 
-remove_fork_from_cup:
-  description: "Remove the fork from the cup and lift it clear"
+pick_cup:
+  description: "Pick up the cup from the table"
   episode_time_s: 15
-  preconditions: "Fork is in the cup, gripper is open"
-  postconditions: "Fork is held in gripper, lifted above the cup"
+  preconditions: "Cup is on the table within reach, gripper is open"
+  postconditions: "Cup is held in gripper, lifted clear of the table surface"
+  vla:
+    backend: kiteml
+    uri: null   # filled in after KiteML job 6083d339-ad7a-4c0d-a7ba-653742196401 completes
+    job_id: 6083d339-ad7a-4c0d-a7ba-653742196401
 
-place_fork:
-  description: "Place the fork at its setting position on the table"
+pick_cutlery:
+  description: "Pick up a piece of cutlery (fork, knife, or spoon) from the table"
   episode_time_s: 15
-  preconditions: "Fork is held in gripper, gripper is over the place setting"
-  postconditions: "Fork is on the table at the setting position, gripper released"
+  preconditions: "Cutlery is on the table within reach, gripper is open"
+  postconditions: "Cutlery is held in gripper, lifted clear of the table surface"
+  vla:
+    backend: kiteml
+    uri: null   # filled in after KiteML job 186937e9-ced6-4362-ab50-b6c1016c7f4c completes
+    job_id: 186937e9-ced6-4362-ab50-b6c1016c7f4c
 
-move_cup:
-  description: "Move the cup to the upper-right of the place setting"
+pick_bowl:
+  description: "Pick up the bowl from the table"
   episode_time_s: 15
-  preconditions: "Cup is on the table, gripper is open"
-  postconditions: "Cup is in the upper-right region of the place setting"
-
-pick_up_plate:
-  description: "Pick up the plate from the stack"
-  episode_time_s: 20
-  preconditions: "Plate is on the stack, gripper is open"
-  postconditions: "Plate is held in gripper, lifted clear of the stack"
-
-place_plate:
-  description: "Place the plate at the center of the place setting"
-  episode_time_s: 20
-  preconditions: "Plate is held in gripper, positioned over the setting"
-  postconditions: "Plate is centered on the setting, gripper released"
+  preconditions: "Bowl is on the table within reach, gripper is open"
+  postconditions: "Bowl is held in gripper, lifted clear of the table surface"
+  vla:
+    backend: kiteml
+    uri: null   # filled in after KiteML job a1bf35c0-5830-4dfe-ac85-877cc5903298 completes
+    job_id: a1bf35c0-5830-4dfe-ac85-877cc5903298
