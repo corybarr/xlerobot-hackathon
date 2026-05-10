@@ -71,8 +71,9 @@ def t_camera_capture():
 
 
 def t_ollama_reachable():
+    headers = {"Authorization": f"Bearer {orch.GEMMA_PROXY_TOKEN}"} if orch.GEMMA_PROXY_TOKEN else {}
     try:
-        r = requests.get(f"{orch.OLLAMA_HOST}/api/tags", timeout=2)
+        r = requests.get(f"{orch.OLLAMA_HOST}/api/tags", headers=headers, timeout=5)
         r.raise_for_status()
         models = [m["name"] for m in r.json().get("models", [])]
     except Exception as e:
