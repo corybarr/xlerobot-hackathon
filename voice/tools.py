@@ -1,136 +1,177 @@
-"""Voice-callable tool layer. Every tool wraps an orchestrator function.
+"""Voice-callable skills — one tool per trained VLA.
 
-The voice agent's tool surface is intentionally tiny — the orchestrator
-already does the SELECT / INVOKE / VERIFY work, this module just exposes
-it as async tools for Pipecat to dispatch.
+Architecture:
 
-Tools:
+    Phone -> Vapi -> Gemma 4 (planner, on Spark) -> tool call to /api/tools/<skill>
+                                                            |
+                                              voice/server.py on tablet
+                                                            |
+                                                spawns lerobot-record with
+                                                --policy.path=<HF repo>
+                                                            |
+                                                  Trained VLA drives the arm
 
-* ``look_at_scene(focus?)``  — capture a frame + ask Gemma for a description
-* ``list_skills()``           — return skills.yaml as a structured catalog
-* ``propose_skill(goal?)``    — orchestrator.select_next_skill (Gemma picks)
-* ``execute_skill(name)``     — orchestrator.execute_skill_with_verification
-                                 (runs lerobot-record subprocess + Gemma verifier)
-* ``queue_skills(steps)``     — execute a list of skills in order
-* ``get_status()``            — last action outcome + history snapshot
-* ``cancel_current()``        — terminate any running VLA subprocess
+Each ``pick_*`` tool corresponds to one entry in ``skills/skills.yaml``.
+Gemma picks which to call; this module just runs the VLA. No verifier
+loop, no orchestrator-style SELECT/INVOKE/VERIFY — Gemma's voice
+conversation IS the loop.
 
-Every method returns a JSON-serialisable dict. Errors never raise — they
-come back as ``{"error": str, "where": str}`` so the voice loop keeps
-running and the human gets to hear what went wrong.
+``look_at_scene`` is the only multimodal tool: it captures a frame from
+a separate "vision camera" (different index from the arm-recording
+cameras) and asks Gemma what it sees. Vapi reads the description aloud.
+
+The VLA invocation
+------------------
+
+We use ``lerobot-record`` from the lerobot conda env. In current lerobot
+that's the de-facto inference path on real hardware: ``num_episodes=1``
++ ``push_to_hub=false`` runs the policy for one episode and discards the
+local dataset. There's no separate ``lerobot-infer`` in the released
+lerobot today; ``lerobot-eval`` is sim-only.
+
+Live narration over the phone
+-----------------------------
+
+Each VLA run takes 15-30 s. The async pattern (``pick_*_async`` returns
+a job_id; ``get_status(job_id)`` polls) keeps the caller from sitting
+in silence. The system prompt teaches Gemma to call ``get_status`` every
+few seconds and read the latest update aloud.
 """
 
 from __future__ import annotations
 
 import asyncio
 import base64
+import os
+import subprocess
+import threading
 import time
+import uuid
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Optional
 
+import cv2
+import requests
+import yaml
 from loguru import logger
 
-# Reuse the orchestrator's plumbing wholesale.
-from orchestrator import orchestrator as orch
+
+# ── Settings from env (no orchestrator dependency) ────────────────────────
+REPO_ROOT = Path(__file__).resolve().parent.parent
+SKILLS_YAML = REPO_ROOT / "skills" / "skills.yaml"
+
+# Camera dedicated to Gemma's vision (separate from arm cameras).
+# The arm-recording cameras are configured in lerobot-record's robot config;
+# the *vision* camera here is just for look_at_scene.
+VISION_CAMERA_INDEX = int(os.environ.get("VISION_CAMERA_INDEX", os.environ.get("CAMERA_INDEX", "0")))
+
+# Arm ports — passed through to lerobot-record.
+FOLLOWER_PORT = os.environ.get("FOLLOWER_PORT", "COM10")
+LEADER_PORT = os.environ.get("LEADER_PORT", "COM7")
+
+# How to reach Gemma (for look_at_scene's multimodal describe).
+OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://localhost:11434").rstrip("/")
+GEMMA_MODEL = os.environ.get("GEMMA_MODEL", "gemma3:27b")
+GEMMA_PROXY_TOKEN = os.environ.get("GEMMA_PROXY_TOKEN", "")
+
+# Where to find the lerobot CLI. Default to the conda env path the team
+# uses; override LEROBOT_RECORD_BIN to point elsewhere.
+LEROBOT_RECORD_BIN = os.environ.get(
+    "LEROBOT_RECORD_BIN",
+    str(Path.home() / "miniconda3" / "envs" / "lerobot" / "Scripts" / "lerobot-record.exe"),
+)
+
+SKILL_TIMEOUT_S = float(os.environ.get("SKILL_TIMEOUT_S", "45.0"))
+
+
+def _load_skills() -> dict[str, dict[str, Any]]:
+    """Read skills.yaml. The voice service must restart to pick up edits."""
+    if not SKILLS_YAML.exists():
+        logger.warning("skills.yaml not found at {} — VoiceTools will be empty.", SKILLS_YAML)
+        return {}
+    with open(SKILLS_YAML, encoding="utf-8") as f:
+        return yaml.safe_load(f) or {}
+
+
+# ── Job machinery ─────────────────────────────────────────────────────────
 
 
 @dataclass
-class _ExecRecord:
-    when: float
+class JobState:
+    job_id: str
     skill: str
-    verdict: str
-    reason: str
-    duration_s: float
+    started_at: float
+    state: str = "starting"   # starting | running | completed | error | timeout | cancelled
+    message: str = ""
+    finished_at: Optional[float] = None
+    proc_pid: Optional[int] = None
+    log_tail: list[str] = field(default_factory=list)
+
+    def snapshot(self) -> dict[str, Any]:
+        return {
+            "job_id": self.job_id,
+            "skill": self.skill,
+            "state": self.state,
+            "message": self.message,
+            "started_at": self.started_at,
+            "finished_at": self.finished_at,
+            "elapsed_s": round((self.finished_at or time.time()) - self.started_at, 2),
+            "log_tail": self.log_tail[-5:],
+        }
+
+
+# ── VoiceTools ────────────────────────────────────────────────────────────
 
 
 class VoiceTools:
-    """Async wrappers around orchestrator functions.
+    """Skill-shaped tools Gemma calls via Vapi.
 
-    One instance per server process — the orchestrator's subprocess + camera
-    state aren't safe for concurrent skill execution. The Pipecat pipeline
-    serializes through ``_executor_lock``.
+    The instance is built once at server startup. One arm, one camera —
+    we serialize concurrent skill executions through ``_lock``.
     """
 
     def __init__(self) -> None:
-        self._skills: dict[str, Any] = orch.load_skills()
-        self._history: list[_ExecRecord] = []
-        self._current_proc: Optional[Any] = None
-        self._executor_lock = asyncio.Lock()
-        self._cancel_requested = False
-        # Cache the last frame so look_at_scene can return promptly even if
-        # the camera is briefly busy. Refreshed every time we actually look.
-        self._last_frame_b64: Optional[str] = None
-        self._last_frame_ts: float = 0.0
+        self._skills: dict[str, dict[str, Any]] = _load_skills()
+        self._jobs: dict[str, JobState] = {}
+        self._current_proc: Optional[subprocess.Popen] = None
+        self._lock = threading.Lock()
+        self._cancel_flag = False
 
-    # ------------------------------------------------------------------
-    # look_at_scene  — Gemma multimodal "what do you see"
-    # ------------------------------------------------------------------
+    # ── look_at_scene ────────────────────────────────────────────────
 
     async def look_at_scene(self, focus: str = "") -> dict[str, Any]:
-        """Capture the current camera frame and have Gemma describe it.
+        """Capture the vision camera and have Gemma describe what's there.
 
-        Reuses :func:`orchestrator.orchestrator.capture_frame` for the
-        camera grab and :func:`_gemma_call` for the multimodal call — same
-        proxy, same auth, same model as the orchestrator. The voice loop
-        gets the description as plain text it can speak.
+        Uses a different camera index from the arm-recording cameras —
+        Gemma sees the table from its own viewpoint. Set ``VISION_CAMERA_INDEX``.
         """
         loop = asyncio.get_running_loop()
         try:
-            frame_bytes: bytes = await loop.run_in_executor(
-                None, orch.capture_frame, orch.CAMERA_INDEX
-            )
+            jpeg = await loop.run_in_executor(None, _grab_frame, VISION_CAMERA_INDEX)
         except Exception as exc:
-            logger.warning("capture_frame failed: {}", exc)
+            logger.warning("camera grab failed: {}", exc)
             return {"error": f"camera_failed: {exc!s}", "where": "look_at_scene"}
-
-        self._last_frame_b64 = base64.b64encode(frame_bytes).decode("ascii")
-        self._last_frame_ts = time.time()
 
         focus_clause = f" Focus on {focus}." if focus else ""
         prompt = (
             "Describe what you see on the table in one or two short, "
-            "conversational sentences. Name the objects you actually see "
-            "(cup, bowl, cutlery, etc.). Under 35 words." + focus_clause
+            "conversational sentences. Name objects you actually see "
+            f"(cup, bowl, cutlery, etc.). Under 35 words.{focus_clause}"
         )
 
-        def _ask() -> dict[str, Any]:
-            try:
-                resp = orch._gemma_call([frame_bytes], prompt, timeout=30)  # noqa: SLF001
-                return resp if isinstance(resp, dict) else {"raw": str(resp)}
-            except Exception as exc:
-                return {"error": f"gemma_describe_failed: {exc!s}"}
+        try:
+            description = await loop.run_in_executor(None, _gemma_describe, jpeg, prompt)
+        except Exception as exc:
+            logger.warning("gemma describe failed: {}", exc)
+            return {"error": f"gemma_failed: {exc!s}", "where": "look_at_scene"}
 
-        result = await loop.run_in_executor(None, _ask)
+        return {"description": description, "captured_at": time.time()}
 
-        # orchestrator._gemma_call returns parsed JSON because we ask the
-        # model for "format": "json". For a free-text describe, we override
-        # to plain text — but the existing helper wraps it. Either way,
-        # surface whatever we get.
-        description = ""
-        if isinstance(result, dict):
-            if "error" in result:
-                return {"error": result["error"], "where": "look_at_scene"}
-            description = (
-                result.get("description")
-                or result.get("text")
-                or result.get("raw")
-                or str(result)
-            )
-        return {
-            "description": str(description).strip(),
-            "captured_at": self._last_frame_ts,
-        }
-
-    # ------------------------------------------------------------------
-    # list_skills  — feed Gemma the catalog from skills.yaml
-    # ------------------------------------------------------------------
+    # ── list_skills ──────────────────────────────────────────────────
 
     async def list_skills(self) -> dict[str, Any]:
-        """Return every skill from ``skills/skills.yaml`` plus its VLA target.
-
-        Stable for the call; the LLM caches this. Disabled skills (commented
-        out in YAML) don't appear because ``yaml.safe_load`` doesn't see them.
-        """
+        """All skills from skills.yaml in a stable format."""
         items = []
         for name, meta in self._skills.items():
             items.append({
@@ -139,218 +180,242 @@ class VoiceTools:
                 "preconditions": meta.get("preconditions", ""),
                 "postconditions": meta.get("postconditions", ""),
                 "vla_uri": (meta.get("vla") or {}).get("uri"),
-                "vla_backend": (meta.get("vla") or {}).get("backend", "smolvla"),
                 "episode_time_s": meta.get("episode_time_s"),
             })
         return {"skills": items, "count": len(items)}
 
-    # ------------------------------------------------------------------
-    # propose_skill  — orchestrator.select_next_skill (Gemma picks)
-    # ------------------------------------------------------------------
+    # ── per-skill convenience tools (one-call dispatch) ──────────────
 
-    async def propose_skill(self, goal: str = "") -> dict[str, Any]:
-        """Have Gemma pick the next skill based on the current scene + history.
+    async def pick_cup(self) -> dict[str, Any]:
+        """Run the trained cup-pick VLA on the arm."""
+        return await self._run_skill("pick_cup")
 
-        Delegates to :func:`orchestrator.orchestrator.select_next_skill`.
-        Returns ``{"done": bool, "skill": str?, "reason": str}`` exactly as
-        the orchestrator format. The voice agent reads the reason aloud.
-        """
-        loop = asyncio.get_running_loop()
-        try:
-            frame_bytes: bytes = await loop.run_in_executor(
-                None, orch.capture_frame, orch.CAMERA_INDEX
-            )
-        except Exception as exc:
-            return {"error": f"camera_failed: {exc!s}", "where": "propose_skill"}
+    async def pick_bowl(self) -> dict[str, Any]:
+        """Run the trained bowl-pick VLA on the arm."""
+        return await self._run_skill("pick_bowl")
 
-        # Translate our history records into the orchestrator's StepRecord
-        # shape so select_next_skill can render the "history (most recent
-        # last)" block exactly the way it expects.
-        history = [
-            orch.StepRecord(
-                skill=h.skill,
-                select_reason="",  # unknown after-the-fact
-                verdict=h.verdict,
-                verify_reason=h.reason,
-            )
-            for h in self._history
-        ]
-        actual_goal = goal or orch.GOAL
+    async def pick_cutlery(self) -> dict[str, Any]:
+        """Run the trained cutlery-pick VLA on the arm."""
+        return await self._run_skill("pick_cutlery")
 
-        try:
-            choice = await loop.run_in_executor(
-                None,
-                orch.select_next_skill,
-                frame_bytes,
-                actual_goal,
-                self._skills,
-                history,
-            )
-        except Exception as exc:
-            return {"error": f"select_failed: {exc!s}", "where": "propose_skill"}
+    async def pick_anything(self) -> dict[str, Any]:
+        """Generalist fallback — Mattie's 3-cam fine-tune."""
+        return await self._run_skill("pick_anything")
 
-        return {
-            "done": bool(choice.get("done")),
-            "skill": choice.get("skill"),
-            "reason": choice.get("reason", ""),
-            "goal": actual_goal,
-        }
+    async def run_skill(self, skill: str) -> dict[str, Any]:
+        """Run ANY skill by name. Use this instead of `pick_*` if Gemma
+        prefers a single tool with an argument."""
+        return await self._run_skill(skill)
 
-    # ------------------------------------------------------------------
-    # execute_skill  — orchestrator.execute_skill_with_verification
-    # ------------------------------------------------------------------
+    # ── get_status / cancel ──────────────────────────────────────────
 
-    async def execute_skill(self, *, skill: str) -> dict[str, Any]:
-        """Run one named skill end-to-end via lerobot-record.
+    async def get_status(self, job_id: str = "") -> dict[str, Any]:
+        """Without ``job_id``: a snapshot of the most-recent / active job.
+        With ``job_id``: that specific job's state."""
+        if job_id:
+            job = self._jobs.get(job_id)
+            if job is None:
+                return {"error": f"unknown_job: {job_id!r}", "where": "get_status"}
+            return job.snapshot()
 
-        Calls :func:`orchestrator.orchestrator.execute_skill_with_verification`
-        which:
-
-          1. captures a pre-frame
-          2. spawns ``lerobot-record --policy.path=<HF repo>``
-          3. periodically asks Gemma to compare pre vs current and classify
-             in_progress / completed / problem
-          4. terminates the VLA on completed / problem / timeout
-
-        Returns ``{"skill": str, "verdict": str, "reason": str, "took_seconds":
-        float, "history_index": int}``.
-        """
-        if skill not in self._skills:
-            return {
-                "error": f"unknown_skill: {skill!r}. Known: {sorted(self._skills)}",
-                "where": "execute_skill",
-            }
-
-        async with self._executor_lock:
-            if self._cancel_requested:
-                self._cancel_requested = False
-                return {"error": "cancelled_before_start", "where": "execute_skill"}
-
-            meta = self._skills[skill]
-            backend = (meta.get("vla") or {}).get("backend", "smolvla")
-            start = time.time()
-            loop = asyncio.get_running_loop()
-            try:
-                verdict_tuple = await loop.run_in_executor(
-                    None,
-                    orch.execute_skill_with_verification,
-                    skill,
-                    meta,
-                    backend,
-                )
-            except Exception as exc:
-                logger.warning("execute_skill_with_verification crashed: {}", exc)
-                record = _ExecRecord(
-                    when=time.time(),
-                    skill=skill,
-                    verdict="error",
-                    reason=str(exc),
-                    duration_s=time.time() - start,
-                )
-                self._history.append(record)
-                return {
-                    "error": f"execute_failed: {exc!s}",
-                    "where": "execute_skill",
-                    "skill": skill,
-                }
-
-            verdict, reason = verdict_tuple
-            duration = time.time() - start
-            record = _ExecRecord(
-                when=time.time(),
-                skill=skill,
-                verdict=verdict,
-                reason=reason,
-                duration_s=duration,
-            )
-            self._history.append(record)
-
-            return {
-                "skill": skill,
-                "verdict": verdict,
-                "reason": reason,
-                "took_seconds": round(duration, 2),
-                "history_index": len(self._history) - 1,
-                "vla_uri": (meta.get("vla") or {}).get("uri"),
-                "backend": backend,
-            }
-
-    # ------------------------------------------------------------------
-    # queue_skills  — execute a list in order, bail on first failure
-    # ------------------------------------------------------------------
-
-    async def queue_skills(self, *, steps: list[dict[str, Any]]) -> dict[str, Any]:
-        """Run a list of skills sequentially.
-
-        Each step is an ``execute_skill`` kwargs dict, e.g.
-        ``[{"skill": "pick_cutlery"}, {"skill": "pick_bowl"}]``. Bails on the
-        first non-``completed`` verdict.
-        """
-        results: list[dict[str, Any]] = []
-        for idx, step in enumerate(steps):
-            if self._cancel_requested:
-                self._cancel_requested = False
-                return {
-                    "completed": idx,
-                    "results": results,
-                    "stopped_at": idx,
-                    "stopped_reason": "cancelled",
-                }
-            out = await self.execute_skill(**step)
-            results.append(out)
-            verdict = out.get("verdict")
-            if out.get("error") or verdict not in ("completed", None):
-                return {
-                    "completed": idx + 1,
-                    "results": results,
-                    "stopped_at": idx,
-                    "stopped_reason": out.get("error") or f"verdict={verdict}",
-                }
-        return {
-            "completed": len(results),
-            "results": results,
-            "stopped_at": None,
-            "stopped_reason": None,
-        }
-
-    # ------------------------------------------------------------------
-    # get_status / cancel
-    # ------------------------------------------------------------------
-
-    async def get_status(self) -> dict[str, Any]:
-        """Snapshot of the action history + last frame age. No side effects."""
-        last = self._history[-1] if self._history else None
-        return {
-            "executions_total": len(self._history),
-            "last_execution": (
-                {
-                    "when": last.when,
-                    "skill": last.skill,
-                    "verdict": last.verdict,
-                    "reason": last.reason,
-                    "duration_s": round(last.duration_s, 2),
-                }
-                if last is not None
-                else None
-            ),
-            "last_frame_age_s": (
-                round(time.time() - self._last_frame_ts, 1) if self._last_frame_ts else None
-            ),
-            "history": [
-                {"skill": h.skill, "verdict": h.verdict, "reason": h.reason}
-                for h in self._history[-5:]
-            ],
-        }
+        active = [j for j in self._jobs.values() if j.finished_at is None]
+        if active:
+            return active[0].snapshot()
+        if self._jobs:
+            most_recent = max(self._jobs.values(), key=lambda j: j.started_at)
+            return most_recent.snapshot()
+        return {"state": "idle", "message": "no jobs yet"}
 
     async def cancel_current(self) -> dict[str, Any]:
-        """Best-effort interrupt for the next queued step.
+        """Best-effort kill any running VLA subprocess."""
+        self._cancel_flag = True
+        proc = self._current_proc
+        if proc is not None and proc.poll() is None:
+            try:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                return {"ok": True, "killed_pid": proc.pid}
+            except Exception as exc:
+                return {"error": f"kill_failed: {exc!s}", "where": "cancel_current"}
+        return {"ok": True, "killed_pid": None, "note": "nothing was running"}
 
-        A skill already in flight runs to completion / problem / timeout —
-        the orchestrator's own SKILL_TIMEOUT_S is the upper bound. For
-        emergency stops on the arm side, the user can power-cycle COM10.
+    # ── internal ─────────────────────────────────────────────────────
+
+    async def _run_skill(self, skill: str) -> dict[str, Any]:
+        """Spawn lerobot-record for one skill, return a job_id immediately.
+
+        The agent polls ``get_status(job_id)`` to read live updates as
+        the VLA runs. Skill execution is single-threaded (one arm, one
+        camera) — concurrent calls return an error.
         """
-        self._cancel_requested = True
-        return {"ok": True, "cancel_armed": True}
+        meta = self._skills.get(skill)
+        if not meta:
+            return {
+                "error": f"unknown_skill: {skill!r}. Known: {sorted(self._skills)}",
+                "where": "_run_skill",
+            }
+        vla = meta.get("vla") or {}
+        uri = vla.get("uri")
+        if not uri:
+            return {"error": f"no_vla_uri_for: {skill!r}", "where": "_run_skill"}
+
+        with self._lock:
+            if self._current_proc is not None and self._current_proc.poll() is None:
+                return {
+                    "error": "another_skill_running",
+                    "where": "_run_skill",
+                    "hint": "call cancel_current first, or wait for the running job to finish",
+                }
+            self._cancel_flag = False
+            job = JobState(
+                job_id=uuid.uuid4().hex[:8],
+                skill=skill,
+                started_at=time.time(),
+            )
+            self._jobs[job.job_id] = job
+
+        thread = threading.Thread(
+            target=self._exec_thread,
+            args=(job, uri, int(meta.get("episode_time_s") or 15)),
+            name=f"vla-{job.job_id}",
+            daemon=True,
+        )
+        thread.start()
+
+        return {
+            "job_id": job.job_id,
+            "skill": skill,
+            "vla_uri": uri,
+            "started_at": job.started_at,
+            "hint": "Call get_status(job_id=...) every ~4 seconds to narrate progress.",
+        }
+
+    def _exec_thread(self, job: JobState, vla_uri: str, episode_time_s: int) -> None:
+        """Run lerobot-record in a background thread and stream logs into the job."""
+        cmd = [
+            LEROBOT_RECORD_BIN,
+            "--robot.type=so101_follower",
+            f"--robot.port={FOLLOWER_PORT}",
+            "--robot.id=arm_a_follower",
+            "--teleop.type=so101_leader",
+            f"--teleop.port={LEADER_PORT}",
+            "--teleop.id=arm_a_leader",
+            f"--policy.path={vla_uri}",
+            "--dataset.repo_id=local-eval",
+            "--dataset.num_episodes=1",
+            f"--dataset.episode_time_s={episode_time_s}",
+            "--dataset.push_to_hub=false",
+        ]
+        job.state = "running"
+        job.message = f"launching {Path(vla_uri).name}"
+        job.log_tail.append(job.message)
+        logger.info("[{}] $ {}", job.job_id, " ".join(cmd))
+
+        try:
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+            )
+        except FileNotFoundError as exc:
+            job.state = "error"
+            job.message = (
+                f"lerobot-record not found at {LEROBOT_RECORD_BIN}. "
+                "Set LEROBOT_RECORD_BIN env var."
+            )
+            job.log_tail.append(job.message)
+            job.finished_at = time.time()
+            return
+        except Exception as exc:
+            job.state = "error"
+            job.message = f"spawn_failed: {exc!s}"
+            job.log_tail.append(job.message)
+            job.finished_at = time.time()
+            return
+
+        with self._lock:
+            self._current_proc = proc
+            job.proc_pid = proc.pid
+
+        deadline = time.time() + SKILL_TIMEOUT_S
+        try:
+            assert proc.stdout is not None
+            for line in proc.stdout:
+                line = line.rstrip()
+                if line:
+                    job.log_tail.append(line)
+                    # keep the message field current with whatever's recent
+                    job.message = line[-180:]
+                if self._cancel_flag:
+                    proc.terminate()
+                    job.state = "cancelled"
+                    job.message = "user cancelled"
+                    break
+                if time.time() > deadline:
+                    proc.terminate()
+                    job.state = "timeout"
+                    job.message = f"exceeded {SKILL_TIMEOUT_S}s"
+                    break
+            proc.wait(timeout=10)
+        except Exception as exc:
+            logger.warning("[{}] stream-read failed: {}", job.job_id, exc)
+            job.state = "error"
+            job.message = f"stream_failed: {exc!s}"
+        finally:
+            if job.state == "running":
+                job.state = "completed" if proc.returncode == 0 else "error"
+                job.message = (
+                    "VLA finished cleanly"
+                    if proc.returncode == 0
+                    else f"lerobot-record exited {proc.returncode}"
+                )
+            job.finished_at = time.time()
+            with self._lock:
+                if self._current_proc is proc:
+                    self._current_proc = None
+                self._cancel_flag = False
 
 
-__all__ = ["VoiceTools"]
+# ── Helpers (no orchestrator dependency) ──────────────────────────────────
+
+
+def _grab_frame(camera_index: int) -> bytes:
+    cap = cv2.VideoCapture(camera_index)
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+    ret, frame = cap.read()
+    cap.release()
+    if not ret:
+        raise RuntimeError(f"vision camera {camera_index} returned no frame")
+    ok, jpeg = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+    if not ok:
+        raise RuntimeError("cv2.imencode failed on captured frame")
+    return jpeg.tobytes()
+
+
+def _gemma_describe(jpeg: bytes, prompt: str) -> str:
+    """POST one image + prompt to the Ollama / gemma-proxy and return text."""
+    payload = {
+        "model": GEMMA_MODEL,
+        "prompt": prompt,
+        "images": [base64.b64encode(jpeg).decode("ascii")],
+        "stream": False,
+    }
+    headers = (
+        {"Authorization": f"Bearer {GEMMA_PROXY_TOKEN}"}
+        if GEMMA_PROXY_TOKEN
+        else {}
+    )
+    r = requests.post(
+        f"{OLLAMA_HOST}/api/generate", json=payload, headers=headers, timeout=30
+    )
+    r.raise_for_status()
+    return (r.json().get("response") or "").strip()
+
+
+__all__ = ["VoiceTools", "JobState"]

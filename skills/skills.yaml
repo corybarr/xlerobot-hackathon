@@ -12,16 +12,20 @@
 #   - "molmoact2": MolmoAct2 runner (separate)
 # vla.uri is the path/repo for that backend.
 
+# pick_cup re-enabled 2026-05-10 against Mattie's fresh checkpoint
+# (Mattie-NT/smolvla_pick_cup) — the v1 Globalmysterysnailrevolution
+# upload had a mislabeled dataset (~90% bowls); Mattie retrained on
+# proper cup episodes. The disabled v1 lives in the git history for
+# reference.
 pick_cup:
-  description: "Pick up the cup from the table"
+  description: "Pick up the cup from the table (e.g. lift a cup out of a bowl)"
   episode_time_s: 15
   preconditions: "Cup is on the table within reach, gripper is open"
   postconditions: "Cup is held in gripper, lifted clear of the table surface"
   vla:
     backend: smolvla
-    uri: Globalmysterysnailrevolution/xlerobot-pick-cup-smolvla
-    dataset_uri: Globalmysterysnailrevolution/xlerobot-pick-cup-20ep
-    notes: trained on Spark (GB10) with lerobot-train, 5000 steps, batch=4, full fine-tune. KiteML attempted first but their training container hits a torchcodec bug.
+    uri: Mattie-NT/smolvla_pick_cup
+    notes: Retrained by Mattie on properly-labeled cup episodes (replaces the disabled Globalmysterysnailrevolution/xlerobot-pick-cup-smolvla).
 
 pick_cutlery:
   description: "Pick up a piece of cutlery (fork, knife, or spoon) from the table"

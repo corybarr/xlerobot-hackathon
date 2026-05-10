@@ -34,9 +34,15 @@ xlerobot-voice = "voice.server:main"
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
-[tool.setuptools.packages.find]
-where = ["."]
-include = ["voice*"]
+# Flat layout: the voice/ directory contains pyproject.toml AND __init__.py.
+# Tell setuptools that the `voice` package IS this directory (not a subdir),
+# and that `voice.tests` lives in tests/.
+[tool.setuptools]
+packages = ["voice", "voice.tests"]
+
+[tool.setuptools.package-dir]
+"voice" = "."
+"voice.tests" = "tests"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

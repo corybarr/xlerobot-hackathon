@@ -1,29 +1,53 @@
-"""FastAPI server — Twilio bridge + agent discovery for the voice frontend.
+"""FastAPI server — webhook target for Vapi's tool calls.
 
 Endpoints
 ---------
 
-* ``POST /twilio/inbound`` — TwiML <Connect><Stream> directive
-* ``WS   /ws``             — Twilio media stream socket (one Pipecat pipeline per call)
-* ``GET  /health``         — Liveness + runtime snapshot
-* ``GET  /api/agent.json`` — Full agent contract for non-voice integrations
-                              (system prompt + OpenAI tool schemas + skills.yaml)
-* ``POST /api/tools/{name}`` — Direct HTTP invocation of any VoiceTools method
-* ``GET  /api/skills``     — Skill catalog (mirrors `voice.tools.VoiceTools.list_skills`)
+* ``GET  /health``         — Liveness + runtime snapshot.
+* ``GET  /api/agent.json`` — Full agent contract: system prompt + Vapi-format
+                              tool schemas + skill catalog. Used by the
+                              ``vapi-bootstrap.py`` script that creates the
+                              Vapi Assistant via API.
+* ``GET  /api/skills``     — Skill catalog from ``skills/skills.yaml``.
+* ``POST /api/tools/{name}`` — Vapi tool webhook. Vapi POSTs a tool call here;
+                              we run the matching :class:`VoiceTools` method
+                              and return the JSON result. This is where the
+                              VLA execution starts.
 
-Process model: ONE process per machine. The orchestrator's lerobot-record
-subprocess + camera capture serialize at the OS level — concurrent calls
-would fight over COM10 / the camera. The singleton ``VoiceTools`` holds
-the executor lock.
+Vapi tool webhooks
+------------------
+
+Vapi posts tool calls in this shape (one OR many in ``message.toolCallList``)::
+
+    {
+      "message": {
+        "type": "tool-calls",
+        "toolCallList": [
+          {"id": "call_123", "name": "pick_cup", "arguments": {...}}
+        ]
+      }
+    }
+
+We accept BOTH shapes:
+
+1. **Vapi native** — POST ``/api/tools`` with the full ``message`` payload;
+   we dispatch each ``toolCallList`` item to the matching method.
+2. **Direct** — POST ``/api/tools/<tool_name>`` with just the kwargs;
+   used by ``curl`` smoke-tests and any non-Vapi caller.
+
+Both return a ``results`` array Vapi unpacks into the LLM context.
+
+Process model: ONE process, one arm, one camera. ``VoiceTools`` serialises
+concurrent skill executions through a lock.
 """
 
 from __future__ import annotations
 
 import json
-from typing import Optional
+from typing import Any, Optional
 
-from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import JSONResponse, PlainTextResponse, Response
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse, PlainTextResponse
 from loguru import logger
 
 from .config import VoiceSettings, get_settings
@@ -42,6 +66,51 @@ def _get_tools() -> VoiceTools:
     return _tools
 
 
+# ── System prompt for Gemma 4 (what Vapi sends as the assistant's role) ──
+SYSTEM_PROMPT = """You are the voice operator for an SO-101 bimanual robot arm. You speak with the caller over the phone and drive the arm by calling the right trained Vision-Language-Action (VLA) policy for what they want done.
+
+# How execution works
+
+Each "skill" is a separately trained SmolVLA checkpoint. When you call `pick_cup` (or any other `pick_*` tool), the server spawns `lerobot-record` with the matching HuggingFace policy repo. The trained policy drives the arm. You don't move joints directly — you pick the skill, the policy does the motion.
+
+The tools return a `job_id` instantly. Call `get_status(job_id)` every 3-5 seconds to read the latest progress aloud, until the state is `completed`, `error`, `timeout`, or `cancelled`.
+
+# Tools
+
+1. `look_at_scene(focus?)` — describe what the vision camera currently sees. Always call before naming a target — the scene changes.
+
+2. `list_skills()` — full catalog of trained skills (cup, bowl, cutlery, plus a generalist `pick_anything`). Cache it; stable for the call.
+
+3. `pick_cup()` / `pick_bowl()` / `pick_cutlery()` / `pick_anything()` — run one trained VLA. Returns a `job_id` instantly.
+
+4. `run_skill(skill="...")` — same as the per-skill tools but takes a name; use when the human asks for something by name.
+
+5. `get_status(job_id?)` — latest status of a specific job (or the most recent if no id). State is one of: starting / running / completed / error / timeout / cancelled. Read the `message` field aloud.
+
+6. `cancel_current()` — kill any running VLA subprocess. Use when the caller says "stop".
+
+# Conversation arc
+
+1. Greet briefly: "Hi, this is the robot. What would you like me to pick up?"
+2. Hear the request. If specific ("pick up the cup"), call `look_at_scene` to confirm it's there, then call `pick_cup()`.
+3. If vague ("set the table"), call `look_at_scene`, then pick a skill yourself based on what you see — read your reasoning aloud first.
+4. After calling a `pick_*` tool, you get back `{"job_id": "...", ...}`. Tell the caller "I'm running the cup pick now" and start polling `get_status(job_id=...)` every ~4 seconds.
+5. For each status reply, read the `message` field aloud if it changed meaningfully (skip duplicates).
+6. When state is `completed`, say so. If `error` / `timeout` / `cancelled`, read the message reason.
+7. Ask if there's anything else.
+
+# Voice style
+
+Speak short. Never read URLs / HF repo IDs / coordinates aloud. If a tool returns `{"error": ...}`, acknowledge briefly and ask the caller how to proceed.
+
+# Things you don't have
+
+- No joint-level control. Only the trained skill tools.
+- No bimanual coordination yet — the trained policies are single-arm.
+- No `pick_fork` / `pick_spoon` specifically — use `pick_cutlery`.
+"""
+
+
 def create_app(settings: Optional[VoiceSettings] = None) -> FastAPI:
     settings = settings or get_settings()
 
@@ -49,9 +118,9 @@ def create_app(settings: Optional[VoiceSettings] = None) -> FastAPI:
         title="xlerobot-voice",
         version="0.1.0",
         description=(
-            "Phone-call voice frontend for the xlerobot-hackathon orchestrator. "
-            "Pipecat (Twilio + Deepgram + Gemma 4 + ElevenLabs) on top of "
-            "skills.yaml + lerobot-record."
+            "Vapi tool webhook + agent discovery for the xlerobot-hackathon "
+            "VLA skills. Each skill is one trained SmolVLA checkpoint run "
+            "via lerobot-record."
         ),
     )
 
@@ -63,165 +132,205 @@ def create_app(settings: Optional[VoiceSettings] = None) -> FastAPI:
             "status": "ok",
             "service": "xlerobot-voice",
             "version": "0.1.0",
-            "ollama_model": settings.ollama_model,
-            "ollama_base_url": settings.ollama_base_url,
-            "skills_count": len(tools._skills),  # noqa: SLF001
-            "executions_total": len(tools._history),  # noqa: SLF001
+            "skills": list(tools._skills.keys()),  # noqa: SLF001
+            "jobs_total": len(tools._jobs),  # noqa: SLF001
             "webhook_host": settings.webhook_host,
-            "confirm_before_execute": settings.confirm_before_execute,
         }
 
     # ── Agent discovery ──────────────────────────────────────────────
     @app.get("/api/agent.json")
     async def agent_manifest() -> JSONResponse:
-        """Full contract for other LLM agents (text, MCP, custom) to drive this service.
-
-        Returns system prompt + OpenAI-format tool schemas + the skills
-        catalog. Drop the schemas into any chat-completions call's ``tools``
-        field; route tool calls to ``POST /api/tools/{name}``.
-        """
-        from .agent import build_openai_tool_schemas, build_system_prompt
-
         tools = _get_tools()
-        skills_list = await tools.list_skills()
-        return JSONResponse(
-            {
-                "schema_version": "0.1",
-                "name": "xlerobot-voice",
-                "version": "0.1.0",
-                "summary": (
-                    "Voice + text frontend for the xlerobot-hackathon "
-                    "orchestrator (Set-the-Table track). Drives lerobot-record "
-                    "on trained SmolVLA checkpoints via skills.yaml."
-                ),
-                "system_prompt": build_system_prompt(settings),
-                "tools": build_openai_tool_schemas(),
-                "skills": skills_list["skills"],
-                "endpoints": {
-                    "voice_inbound": "POST /twilio/inbound (TwiML)",
-                    "voice_ws": "WS /ws (Twilio media stream)",
-                    "text_invoke": "POST /api/tools/{name} body={kwargs}",
-                    "discovery": "GET /api/agent.json",
-                    "catalog": "GET /api/skills",
-                    "health": "GET /health",
-                },
-                "runtime": {
-                    "ollama_base_url": settings.ollama_base_url,
-                    "ollama_model": settings.ollama_model,
-                    "confirm_before_execute": settings.confirm_before_execute,
-                },
-            }
-        )
+        skills = (await tools.list_skills())["skills"]
+        return JSONResponse({
+            "schema_version": "0.2",
+            "name": "xlerobot-voice",
+            "version": "0.1.0",
+            "summary": (
+                "Voice frontend for the xlerobot-hackathon Set-the-Table VLAs. "
+                "Each skill = one trained SmolVLA checkpoint. Gemma 4 picks "
+                "which to call from the live camera view; lerobot-record runs "
+                "the chosen policy on the arm."
+            ),
+            "system_prompt": SYSTEM_PROMPT,
+            "tools": _build_vapi_tool_schemas(skills),
+            "skills": skills,
+            "endpoints": {
+                "tool_webhook": "POST /api/tools  (Vapi native) OR /api/tools/<name>  (direct)",
+                "discovery": "GET /api/agent.json",
+                "catalog": "GET /api/skills",
+                "health": "GET /health",
+            },
+        })
 
     @app.get("/api/skills")
     async def skills_catalog() -> dict:
         return await _get_tools().list_skills()
 
-    # ── Direct tool invocation (HTTP, no voice) ──────────────────────
+    # ── Tool webhook (Vapi native shape) ─────────────────────────────
+    @app.post("/api/tools")
+    async def vapi_tool_webhook(request: Request) -> JSONResponse:
+        """Vapi POSTs the full ``message`` payload here. We dispatch each
+        ``toolCallList`` entry, return ``results`` Vapi unpacks into the
+        LLM context."""
+        body = await request.json()
+        msg = (body or {}).get("message") or body or {}
+        tool_calls = msg.get("toolCallList") or msg.get("tool_calls") or []
+        if not isinstance(tool_calls, list) or not tool_calls:
+            return JSONResponse({"error": "no toolCallList in payload"}, status_code=400)
+
+        tools = _get_tools()
+        results = []
+        for call in tool_calls:
+            cid = call.get("id") or call.get("toolCallId") or "(none)"
+            name = call.get("name") or (call.get("function") or {}).get("name")
+            args = call.get("arguments") or (call.get("function") or {}).get("arguments") or {}
+            if isinstance(args, str):
+                try:
+                    args = json.loads(args)
+                except Exception:
+                    args = {}
+            res = await _dispatch_one(tools, name, args)
+            results.append({"toolCallId": cid, "result": res})
+
+        return JSONResponse({"results": results})
+
+    # ── Direct tool invocation ───────────────────────────────────────
     @app.post("/api/tools/{name}")
-    async def invoke_tool(name: str, request: Request) -> JSONResponse:
+    async def direct_invoke(name: str, request: Request) -> JSONResponse:
         try:
             body = await request.json()
         except Exception:
             body = {}
         if not isinstance(body, dict):
             raise HTTPException(status_code=400, detail="body must be a JSON object")
-
         tools = _get_tools()
-        method = getattr(tools, name, None)
-        if method is None or not callable(method) or name.startswith("_"):
-            raise HTTPException(status_code=404, detail=f"unknown tool: {name}")
-
-        try:
-            result = await method(**body)
-        except TypeError as exc:
-            raise HTTPException(status_code=400, detail=f"bad args: {exc!s}") from exc
-        except Exception as exc:
-            logger.warning("tool {} crashed: {}", name, exc)
-            return JSONResponse(
-                {"error": f"tool_crashed: {exc!s}", "where": name}, status_code=200
-            )
-
+        result = await _dispatch_one(tools, name, body)
+        if isinstance(result, dict) and result.get("error") in (
+            f"unknown_tool: {name!r}",
+        ):
+            raise HTTPException(status_code=404, detail=result["error"])
         return JSONResponse(result)
-
-    # ── Twilio inbound webhook ───────────────────────────────────────
-    @app.post("/twilio/inbound")
-    async def twilio_inbound(request: Request) -> Response:
-        host = settings.webhook_host
-        if host.startswith("https://"):
-            ws_url = "wss://" + host[len("https://") :] + "/ws"
-        elif host.startswith("http://"):
-            ws_url = "ws://" + host[len("http://") :] + "/ws"
-        else:
-            ws_url = "wss://" + host.lstrip("/") + "/ws"
-
-        twiml = (
-            '<?xml version="1.0" encoding="UTF-8"?>'
-            "<Response>"
-            "<Connect>"
-            f'<Stream url="{ws_url}" />'
-            "</Connect>"
-            "</Response>"
-        )
-        return Response(content=twiml, media_type="application/xml")
-
-    # ── Twilio media stream WebSocket ────────────────────────────────
-    @app.websocket("/ws")
-    async def twilio_ws(websocket: WebSocket) -> None:
-        await websocket.accept()
-        stream_sid: Optional[str] = None
-        try:
-            await websocket.receive_text()           # "connected" frame
-            start_msg = await websocket.receive_text()  # "start" frame w/ streamSid
-            start_data = json.loads(start_msg)
-            stream_sid = start_data.get("start", {}).get("streamSid")
-            if not stream_sid:
-                logger.warning("No streamSid in start frame; dropping call.")
-                await websocket.close(code=1011)
-                return
-            logger.info("New voice call: streamSid={}", stream_sid)
-        except (WebSocketDisconnect, json.JSONDecodeError, KeyError) as exc:
-            logger.warning("Twilio handshake failed: {}", exc)
-            return
-
-        from pipecat.pipeline.runner import PipelineRunner
-        from pipecat.pipeline.task import PipelineTask
-
-        from .agent import build_pipeline
-
-        tools = _get_tools()
-        try:
-            pipeline = build_pipeline(
-                websocket=websocket,
-                stream_sid=stream_sid,
-                tools=tools,
-                settings=settings,
-            )
-            task = PipelineTask(pipeline)
-            runner = PipelineRunner()
-            await runner.run(task)
-        except Exception as exc:  # pragma: no cover - integration only
-            logger.exception("Pipeline crashed: {}", exc)
 
     @app.get("/")
     async def root() -> PlainTextResponse:
         return PlainTextResponse(
             "xlerobot-voice. Discovery: GET /api/agent.json | "
-            "Twilio inbound: POST /twilio/inbound | Health: GET /health"
+            "Vapi webhook: POST /api/tools | Health: GET /health"
         )
 
     return app
 
 
+async def _dispatch_one(tools: VoiceTools, name: Optional[str], args: dict[str, Any]) -> Any:
+    if not name:
+        return {"error": "tool name missing", "where": "_dispatch_one"}
+    method = getattr(tools, name, None)
+    if method is None or not callable(method) or name.startswith("_"):
+        return {"error": f"unknown_tool: {name!r}", "where": "_dispatch_one"}
+    try:
+        return await method(**args)
+    except TypeError as exc:
+        return {"error": f"bad_args: {exc!s}", "where": name}
+    except Exception as exc:
+        logger.warning("tool {} crashed: {}", name, exc)
+        return {"error": f"tool_crashed: {exc!s}", "where": name}
+
+
+def _build_vapi_tool_schemas(skills: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """OpenAI-function-call schemas Vapi accepts in Assistant config."""
+    tools: list[dict[str, Any]] = [
+        {
+            "type": "function",
+            "function": {
+                "name": "look_at_scene",
+                "description": (
+                    "Capture the vision camera and have Gemma describe what's there. "
+                    "Always call this before naming a target — the scene changes."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "focus": {"type": "string", "description": "Optional hint (e.g. 'the cup')."}
+                    },
+                    "required": [],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "list_skills",
+                "description": "All trained skills from skills.yaml. Stable; cache for the call.",
+                "parameters": {"type": "object", "properties": {}, "required": []},
+            },
+        },
+    ]
+    # One tool per skill — Gemma can pick directly by tool name.
+    for s in skills:
+        tools.append({
+            "type": "function",
+            "function": {
+                "name": s["name"],
+                "description": (
+                    f"{s['description']} Trained VLA: "
+                    f"{(s.get('vla_uri') or 'unknown')}. "
+                    f"Preconditions: {s.get('preconditions','—')}. "
+                    f"Postconditions: {s.get('postconditions','—')}."
+                ),
+                "parameters": {"type": "object", "properties": {}, "required": []},
+            },
+        })
+    tools.extend([
+        {
+            "type": "function",
+            "function": {
+                "name": "run_skill",
+                "description": "Run any skill by name. Use when caller asks for something by name.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "skill": {"type": "string", "description": "Exact skill name from list_skills."},
+                    },
+                    "required": ["skill"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "get_status",
+                "description": (
+                    "Latest status of a job (or the most-recent if no id). "
+                    "Read the `message` field aloud."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "job_id": {"type": "string", "description": "Job id from a pick_* tool."}
+                    },
+                    "required": [],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "cancel_current",
+                "description": "Kill any running VLA subprocess. Use when caller says 'stop'.",
+                "parameters": {"type": "object", "properties": {}, "required": []},
+            },
+        },
+    ])
+    return tools
+
+
 def main() -> None:
-    """Entry point for the ``xlerobot-voice`` console script."""
     import uvicorn
 
     settings = get_settings()
     logger.info(
-        "xlerobot-voice starting | llm={} ({}) | webhook={} | port={}",
-        settings.ollama_base_url,
-        settings.ollama_model,
+        "xlerobot-voice starting | webhook={} | port={}",
         settings.webhook_host,
         settings.server_port,
     )
@@ -236,4 +345,11 @@ def main() -> None:
 
 app: Optional[FastAPI] = None
 
-__all__ = ["create_app", "main", "app"]
+__all__ = ["create_app", "main", "app", "SYSTEM_PROMPT"]
+
+
+# Enable `python -m voice.server` (was missing — server "ran" but only
+# imported the module, leaving main() uncalled, which produced silent
+# zero-output exits every time we tried to launch detached.)
+if __name__ == "__main__":
+    main()
