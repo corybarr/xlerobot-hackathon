@@ -19,8 +19,9 @@ pick_cup:
   postconditions: "Cup is held in gripper, lifted clear of the table surface"
   vla:
     backend: kiteml
-    uri: null   # filled in after KiteML job 6083d339-ad7a-4c0d-a7ba-653742196401 completes
-    job_id: 6083d339-ad7a-4c0d-a7ba-653742196401
+    uri: null   # filled in after KiteML job 99197e59-67bf-4663-a5b4-3fb5875880a1 completes
+    job_id: 99197e59-67bf-4663-a5b4-3fb5875880a1
+    dataset_uri: Globalmysterysnailrevolution/xlerobot-pick-cup-20ep
 
 pick_cutlery:
   description: "Pick up a piece of cutlery (fork, knife, or spoon) from the table"
@@ -29,8 +30,9 @@ pick_cutlery:
   postconditions: "Cutlery is held in gripper, lifted clear of the table surface"
   vla:
     backend: kiteml
-    uri: null   # filled in after KiteML job 186937e9-ced6-4362-ab50-b6c1016c7f4c completes
-    job_id: 186937e9-ced6-4362-ab50-b6c1016c7f4c
+    uri: null   # filled in after KiteML job e939d99e-cc48-4996-84ed-b969a9af30c4 completes
+    job_id: e939d99e-cc48-4996-84ed-b969a9af30c4
+    dataset_uri: Globalmysterysnailrevolution/xlerobot-pick-cutlery-20ep
 
 pick_bowl:
   description: "Pick up the bowl from the table"
@@ -39,5 +41,6 @@ pick_bowl:
   postconditions: "Bowl is held in gripper, lifted clear of the table surface"
   vla:
     backend: kiteml
-    uri: null   # filled in after KiteML job a1bf35c0-5830-4dfe-ac85-877cc5903298 completes
-    job_id: a1bf35c0-5830-4dfe-ac85-877cc5903298
+    uri: null   # filled in after KiteML job 1fff2259-1f0c-41ea-80b6-c42e3e80e9f0 completes
+    job_id: 1fff2259-1f0c-41ea-80b6-c42e3e80e9f0
+    dataset_uri: Globalmysterysnailrevolution/xlerobot-pick-bowl-20ep
