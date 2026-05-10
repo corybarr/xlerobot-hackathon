@@ -44,3 +44,14 @@ pick_bowl:
     uri: Globalmysterysnailrevolution/xlerobot-pick-bowl-smolvla
     dataset_uri: Globalmysterysnailrevolution/xlerobot-pick-bowl-20ep
     notes: trained on Spark, 5000 steps, batch=4, full fine-tune.
+
+pick_anything:
+  description: "General pick — try this when the object doesn't clearly match cup, cutlery, or bowl, or when the per-skill VLA failed and you want a broader fallback"
+  episode_time_s: 15
+  preconditions: "An object is on the table within reach, gripper is open"
+  postconditions: "Object is held in gripper, lifted clear of the table"
+  vla:
+    backend: smolvla
+    uri: Mattie-NT/smolvla_mattie_3cam_ft
+    dataset_uri: (Mattie's superset)
+    notes: Mattie's 3-camera SmolVLA fine-tune; matches our hand_cam/front_cam/side_cam rig exactly. Trained on a multi-task superset rather than a single skill. Use as fallback or A/B against per-skill ones.

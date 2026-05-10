@@ -27,3 +27,5 @@ site/
 # Local env / secrets
 .env
 .env.local
+.gemma_token
+.kite_token
