@@ -40,7 +40,7 @@ pick_bowl:
   preconditions: "Bowl is on the table within reach, gripper is open"
   postconditions: "Bowl is held in gripper, lifted clear of the table surface"
   vla:
-    backend: kiteml
-    uri: null   # filled in after KiteML job 1fff2259-1f0c-41ea-80b6-c42e3e80e9f0 completes
-    job_id: 1fff2259-1f0c-41ea-80b6-c42e3e80e9f0
+    backend: smolvla
+    uri: Globalmysterysnailrevolution/xlerobot-pick-bowl-smolvla
     dataset_uri: Globalmysterysnailrevolution/xlerobot-pick-bowl-20ep
+    notes: trained on Spark, 5000 steps, batch=4, full fine-tune.
