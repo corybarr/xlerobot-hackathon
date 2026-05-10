@@ -136,8 +136,9 @@ def t_execute_with_stub_vla():
     skills = orch.load_skills()
     skill_name = next(iter(skills))
 
-    def fake_command(name, backend):
-        # cross-platform: python sleep
+    def fake_command(name, backend, skill_meta=None):
+        # cross-platform: python sleep. Accepts the same kwargs as the real
+        # build_vla_command so signature changes don't silently break the test.
         return [sys.executable, "-c", "import time; time.sleep(2)"]
 
     def fake_capture(idx):
