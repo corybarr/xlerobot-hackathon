@@ -1,5 +1,22 @@
 """xlerobot-voice: phone-call voice frontend for the xlerobot orchestrator.
 
+Loads ``voice/.env`` at import time so submodules can read os.environ
+directly (tools.py and config.py both rely on this — pydantic-settings
+would handle it for the latter, but tools.py reads raw env at module
+load to wire up the Gemma proxy URL, ROS ports, etc).
+"""
+
+from __future__ import annotations
+
+import pathlib
+from dotenv import load_dotenv
+
+_ENV_FILE = pathlib.Path(__file__).resolve().parent / ".env"
+if _ENV_FILE.is_file():
+    load_dotenv(_ENV_FILE)
+
+"""
+
 The caller dials a Twilio number; Pipecat bridges the audio into a
 text-only loop with Gemma 4 over the existing gemma-proxy on Spark.
 Gemma sees the camera (via the orchestrator's ``capture_frame``), picks
@@ -8,22 +25,6 @@ a trained per-skill VLA from ``skills/skills.yaml``, and dispatches
 function. No new LLM, no new VLA stack — just voice IO + tool dispatch
 on top of what's already wired.
 
-Sister package to ``orchestrator/``; reuses its functions wholesale.
-
-Import-time side effect: prepends the repo root to ``sys.path`` so the
-sibling ``orchestrator`` package is importable regardless of where the
-server was launched. The voice/ directory holds pyproject.toml + its
-own __init__.py (flat layout), so the parent of __file__ IS the repo
-root that contains both ``voice/`` and ``orchestrator/``.
 """
-
-from __future__ import annotations
-
-import pathlib
-import sys
-
-_REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
-if str(_REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(_REPO_ROOT))
 
 __version__ = "0.1.0"

@@ -2,30 +2,33 @@
 # Each entry is one trained per-skill VLA — Gemma chooses among them.
 #
 # Consumed by:
+#   voice/tools.py                -> per-skill tool (pick_cup, pick_bowl, etc.)
+#                                    each spawns lerobot-record with policy.path = vla.uri
 #   scripts/record_skill.sh       -> task description + episode time for lerobot-record
 #   orchestrator/orchestrator.py  -> available-actions list given to Gemma + per-skill VLA invocation
 #
 # vla.backend selects how the policy is invoked at runtime:
-#   - "kiteml"   : checkpoint trained on KiteML, downloaded to local path or invoked via their API
+#   - "act"      : ACT (Action-Chunking Transformer)
 #   - "smolvla"  : a vanilla lerobot SmolVLA checkpoint on HF Hub
-#   - "act"      : ACT
+#   - "kiteml"   : checkpoint trained on KiteML
 #   - "molmoact2": MolmoAct2 runner (separate)
 # vla.uri is the path/repo for that backend.
+#
+# IMPORTANT (per Mattie 2026-05-10): the MakerMods lerobot fork is on 0.3.4.
+# The act_pick_cup_v3 local checkpoint on the thumb drive (and copied to
+# ~/xlerobot-models/ on Spark for backup) was trained on upstream 0.5.1+
+# and DOES NOT LOAD in 0.3.4 — only Mattie's HF ACT repos work in the GUI
+# and are the verified-working defaults referenced here.
 
-# pick_cup re-enabled 2026-05-10 against Mattie's fresh checkpoint
-# (Mattie-NT/smolvla_pick_cup) — the v1 Globalmysterysnailrevolution
-# upload had a mislabeled dataset (~90% bowls); Mattie retrained on
-# proper cup episodes. The disabled v1 lives in the git history for
-# reference.
 pick_cup:
   description: "Pick up the cup from the table (e.g. lift a cup out of a bowl)"
   episode_time_s: 15
   preconditions: "Cup is on the table within reach, gripper is open"
   postconditions: "Cup is held in gripper, lifted clear of the table surface"
   vla:
-    backend: smolvla
-    uri: Mattie-NT/smolvla_pick_cup
-    notes: Retrained by Mattie on properly-labeled cup episodes (replaces the disabled Globalmysterysnailrevolution/xlerobot-pick-cup-smolvla).
+    backend: act
+    uri: Mattie-NT/act_pick_cup_v3
+    notes: Mattie's fresh cup ACT — replaces the disabled v1 SmolVLA (dataset was mislabeled bowls). Verified working in MakerMods GUI.
 
 pick_cutlery:
   description: "Pick up a piece of cutlery (fork, knife, or spoon) from the table"
@@ -33,10 +36,9 @@ pick_cutlery:
   preconditions: "Cutlery is on the table within reach, gripper is open"
   postconditions: "Cutlery is held in gripper, lifted clear of the table surface"
   vla:
-    backend: smolvla
-    uri: Globalmysterysnailrevolution/xlerobot-pick-cutlery-smolvla
-    dataset_uri: Globalmysterysnailrevolution/xlerobot-pick-cutlery-20ep
-    notes: trained on Spark, 5000 steps, batch=4, full fine-tune.
+    backend: act
+    uri: Mattie-NT/act_pick_cutlery
+    notes: Mattie's ACT cutlery — verified working in MakerMods GUI on the 0.3.4 fork.
 
 pick_bowl:
   description: "Pick up the bowl from the table"
@@ -44,10 +46,9 @@ pick_bowl:
   preconditions: "Bowl is on the table within reach, gripper is open"
   postconditions: "Bowl is held in gripper, lifted clear of the table surface"
   vla:
-    backend: smolvla
-    uri: Globalmysterysnailrevolution/xlerobot-pick-bowl-smolvla
-    dataset_uri: Globalmysterysnailrevolution/xlerobot-pick-bowl-20ep
-    notes: trained on Spark, 5000 steps, batch=4, full fine-tune.
+    backend: act
+    uri: Mattie-NT/act_pick_bowl
+    notes: Mattie's ACT bowl — verified working in MakerMods GUI on the 0.3.4 fork.
 
 pick_anything:
   description: "General pick — try this when the object doesn't clearly match cup, cutlery, or bowl, or when the per-skill VLA failed and you want a broader fallback"
@@ -57,5 +58,4 @@ pick_anything:
   vla:
     backend: smolvla
     uri: Mattie-NT/smolvla_mattie_3cam_ft
-    dataset_uri: (Mattie's superset)
-    notes: Mattie's 3-camera SmolVLA fine-tune; matches our hand_cam/front_cam/side_cam rig exactly. Trained on a multi-task superset rather than a single skill. Use as fallback or A/B against per-skill ones.
+    notes: Mattie's 3-camera SmolVLA fine-tune; matches the hand_cam/front_cam/side_cam rig exactly. Trained on a multi-task superset rather than a single skill. Use as fallback or A/B against per-skill ones.
