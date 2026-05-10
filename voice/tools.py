@@ -265,12 +265,17 @@ class VoiceTools:
     async def _proxy_to_peer(self, tool: str, args: dict[str, Any]) -> dict[str, Any]:
         """POST a tool call over the tailnet to the peer server's /api/tools/<tool>.
 
-        Used when this server holds the camera + Vapi webhook but a peer
-        (e.g. Mattie's box on the tailnet) owns the arm USB + lerobot-record.
+        Connect timeout is short (3 s) so Vapi gets a clear failure quickly
+        when the peer is down — its default tool-response window is ~20 s
+        and silent hangs cause the call to drop. Read timeout is also low
+        (8 s) because the peer's pick_* tool returns a job_id immediately
+        (lerobot-record runs in a background thread); only get_status
+        polls the long-running job state.
         """
         url = f"{PEER_ARM_HOST}/api/tools/{tool}"
+        timeout = httpx.Timeout(connect=3.0, read=8.0, write=3.0, pool=3.0)
         try:
-            async with httpx.AsyncClient(timeout=60.0) as client:
+            async with httpx.AsyncClient(timeout=timeout) as client:
                 r = await client.post(url, json=args)
                 if r.status_code >= 400:
                     return {
@@ -279,10 +284,19 @@ class VoiceTools:
                         "peer": PEER_ARM_HOST,
                     }
                 return r.json()
+        except (httpx.ConnectError, httpx.ConnectTimeout):
+            return {
+                "error": (
+                    "peer_unreachable — the arm host isn't responding. "
+                    "Tell the caller Mattie's box may be offline."
+                ),
+                "where": f"_proxy_to_peer({tool})",
+                "peer": PEER_ARM_HOST,
+            }
         except httpx.RequestError as exc:
             logger.warning("peer proxy to {} failed: {}", url, exc)
             return {
-                "error": f"peer_unreachable: {exc!s}",
+                "error": f"peer_request_failed: {exc!s}",
                 "where": f"_proxy_to_peer({tool})",
                 "peer": PEER_ARM_HOST,
             }
