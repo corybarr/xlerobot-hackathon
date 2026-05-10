@@ -98,8 +98,9 @@ def t_build_vla_command_shapes():
 
 def t_select_next_skill_roundtrip():
     skills = orch.load_skills()
+    headers = {"Authorization": f"Bearer {orch.GEMMA_PROXY_TOKEN}"} if orch.GEMMA_PROXY_TOKEN else {}
     try:
-        requests.get(f"{orch.OLLAMA_HOST}/api/tags", timeout=2).raise_for_status()
+        requests.get(f"{orch.OLLAMA_HOST}/api/tags", headers=headers, timeout=5).raise_for_status()
     except Exception:
         raise _Skip("Ollama not reachable")
     # Use a tiny dummy frame (Gemma will reject if we send junk; that's fine for smoke)
@@ -116,8 +117,9 @@ def t_select_next_skill_roundtrip():
 
 def t_verify_skill_state_roundtrip():
     skills = orch.load_skills()
+    headers = {"Authorization": f"Bearer {orch.GEMMA_PROXY_TOKEN}"} if orch.GEMMA_PROXY_TOKEN else {}
     try:
-        requests.get(f"{orch.OLLAMA_HOST}/api/tags", timeout=2).raise_for_status()
+        requests.get(f"{orch.OLLAMA_HOST}/api/tags", headers=headers, timeout=5).raise_for_status()
     except Exception:
         raise _Skip("Ollama not reachable")
     import cv2
