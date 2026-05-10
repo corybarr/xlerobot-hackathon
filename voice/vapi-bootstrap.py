@@ -60,6 +60,37 @@ ASSISTANT_NAME = "xlerobot-demo"
 VAPI = "https://api.vapi.ai"
 HEADERS = {"Authorization": f"Bearer {VAPI_KEY}", "Content-Type": "application/json"}
 
+CREDENTIAL_NAME = "xlerobot-gemma-proxy"
+
+
+def ensure_custom_llm_credential() -> str:
+    """Create (or find existing) a Vapi credential of type custom-llm with
+    our Gemma proxy bearer. Returns its id.
+
+    Vapi rejects ``model.apiKey`` directly on custom-llm models. Auth is
+    plumbed via a Credential resource referenced by ``model.credentialId``.
+    """
+    r = requests.get(f"{VAPI}/credential", headers=HEADERS, timeout=15)
+    r.raise_for_status()
+    for c in r.json():
+        if c.get("name") == CREDENTIAL_NAME or (
+            c.get("provider") == "custom-llm" and c.get("apiKey") == LLM_API_KEY
+        ):
+            print(f"  reusing existing custom-llm credential {c.get('id')}")
+            return c["id"]
+    body = {
+        "provider": "custom-llm",
+        "apiKey": LLM_API_KEY,
+        "name": CREDENTIAL_NAME,
+    }
+    r = requests.post(f"{VAPI}/credential", headers=HEADERS, json=body, timeout=15)
+    if not r.ok:
+        print(f"  credential create HTTP {r.status_code}: {r.text}", file=sys.stderr)
+        r.raise_for_status()
+    cid = r.json()["id"]
+    print(f"  created new custom-llm credential {cid}")
+    return cid
+
 
 def fetch_agent_manifest() -> dict:
     """Pull the system prompt + tool schemas from the local voice server.
@@ -95,7 +126,7 @@ def fetch_agent_manifest() -> dict:
         }
 
 
-def build_assistant_payload(system_prompt: str, tool_schemas: list[dict]) -> dict:
+def build_assistant_payload(system_prompt: str, tool_schemas: list[dict], credential_id: str) -> dict:
     """Construct the Assistant creation body for POST /assistant."""
     # Vapi wants tools shaped as {"type": "function", "function": {...}, "server": {...}}.
     # Our schemas come out as {"type": "function", "function": {...}}; attach a per-tool
@@ -131,6 +162,9 @@ def build_assistant_payload(system_prompt: str, tool_schemas: list[dict]) -> dic
             "tools": vapi_tools,
             "maxTokens": 400,
         },
+        # Vapi custom-llm auth lives on the assistant, not the model:
+        # credentialIds = [<id>] references the credential we minted above.
+        "credentialIds": [credential_id],
         # Optional: a single fallback "server" URL Vapi POSTs to for any tool
         # call whose function-level server.url is missing.
         "server": {"url": TOOL_SERVER_URL},
@@ -183,8 +217,12 @@ def main() -> int:
     manifest = fetch_agent_manifest()
     print(f"    tools: {len(manifest['tools'])}")
 
+    print(f"==> Ensuring custom-llm credential for the Gemma proxy")
+    credential_id = ensure_custom_llm_credential()
+    print(f"    credential id: {credential_id}")
+
     print(f"==> Upserting Vapi assistant {ASSISTANT_NAME!r}")
-    payload = build_assistant_payload(manifest["system_prompt"], manifest["tools"])
+    payload = build_assistant_payload(manifest["system_prompt"], manifest["tools"], credential_id)
     assistant_id = upsert_assistant(payload)
     print(f"    assistant id: {assistant_id}")
 
